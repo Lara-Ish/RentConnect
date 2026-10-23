@@ -349,7 +349,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         <!-- Prominent "Use Face ID" Button below standard form -->
         <button type="button" id="btnUseFaceId" class="clay-btn clay-btn-secondary clay-btn-full" style="display: flex; align-items: center; justify-content: center; gap: 10px; font-weight: 700; padding: 13px 20px; font-size: 14.5px; background: #ffffff; border: 1.5px solid #cbd5e1; box-shadow: var(--clay-button-shadow);" onclick="switchToFaceIdLogin()">
-          <span style="font-size: 18px;">📸</span>
+          <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-700">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6.827 6.175A2.31 2.31 0 0 1 5.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 0 0-1.134-.175 2.31 2.31 0 0 1-1.64-1.055l-.822-1.316a2.192 2.192 0 0 0-1.736-1.039 48.774 48.774 0 0 0-5.232 0 2.192 2.192 0 0 0-1.736 1.039l-.821 1.316Z" />
+            <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 12.75a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0ZM18.75 10.5h.008v.008h-.008V10.5Z" />
+          </svg>
           <span>Use Face ID</span>
         </button>
       </div>
@@ -363,8 +366,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <!-- Mirrored Live Webcam Box with Oval Guide -->
         <div class="face-cam-card gcash-kyc-cam">
           <!-- Real-Time Anti-Spoofing / Liveness Warning Overlay Banner -->
-          <div id="faceSpoofWarningOverlay" class="face-spoof-warning" style="display: none;">
-            <span style="font-size: 15px;">🛡️</span>
+          <div id="faceSpoofWarningOverlay" class="face-spoof-warning" style="display: none; align-items: center; justify-content: center; gap: 8px;">
+            <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6" style="color: #ffffff; width: 18px; height: 18px;">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m0-10.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.75c0 5.592 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.57-.598-3.75h-.002A11.959 11.959 0 0 1 12 2.964ZM12 15.75h.007v.008H12v-.008Z" />
+            </svg>
             <span id="faceSpoofWarningText">Spoof detected: Please remove photos or screens from the camera.</span>
           </div>
 
@@ -673,7 +678,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       let detection = null;
       if (typeof faceapi !== 'undefined' && faceapi.nets.tinyFaceDetector && faceapi.nets.tinyFaceDetector.params) {
         try {
-          const detectorOptions = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 });
+          const detectorOptions = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.3 });
           detection = await faceapi.detectSingleFace(video, detectorOptions).withFaceLandmarks();
         } catch (err) {
           console.warn('faceapi tracking warning:', err);
@@ -681,9 +686,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       }
 
       if (!detection || !detection.landmarks) {
-        updateStatusBadge('🔍', 'Position face in frame', 'needs-center');
-        livenessOpenFrames = 0;
-        livenessCenterFrames = 0;
+        updateStatusBadge('👀', 'Look directly at camera to start', 'normal');
         return;
       }
 
@@ -691,9 +694,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         (typeof detection.landmarks.getPositions === 'function' ? detection.landmarks.getPositions() : null);
 
       if (!landmarks || landmarks.length < 68) {
-        updateStatusBadge('🔍', 'Position face in frame', 'needs-center');
-        livenessOpenFrames = 0;
-        livenessCenterFrames = 0;
+        updateStatusBadge('👀', 'Look directly at camera to start', 'normal');
         return;
       }
 
@@ -731,12 +732,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       // =========================================================================
 
       // --- BLINK STATE MACHINE ---
-      // A genuine blink MUST:
-      // 1) Establish open-eye baseline (avgEAR >= 0.26 for >= 2 frames)
-      // 2) Actively drop below threshold (avgEAR < 0.22, eyes closed)
-      // 3) Rise back above threshold (avgEAR >= 0.25, eyes re-opened)
+      // Relaxed thresholds prevent false rejections under indoor lighting:
+      // 1) Establish open-eye baseline (avgEAR >= 0.24 for >= 2 frames)
+      // 2) Actively drop below threshold (avgEAR < 0.20, eyes closed)
+      // 3) Rise back above threshold (avgEAR >= 0.23, eyes re-opened)
       if (livenessBlinkState === 'INITIAL') {
-        if (avgEAR >= 0.26) {
+        if (avgEAR >= 0.24) {
           livenessOpenFrames++;
           if (livenessOpenFrames >= 2) {
             livenessBlinkState = 'OPEN_OBSERVED';
@@ -745,22 +746,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           livenessOpenFrames = 0;
         }
       } else if (livenessBlinkState === 'OPEN_OBSERVED') {
-        if (avgEAR < 0.22) {
+        if (avgEAR < 0.20) {
           livenessBlinkState = 'DROPPED_CLOSED';
         }
       } else if (livenessBlinkState === 'DROPPED_CLOSED') {
-        if (avgEAR >= 0.25) {
+        if (avgEAR >= 0.23) {
           livenessBlinkState = 'COMPLETED';
         }
       }
 
       // --- HEAD TURN STATE MACHINE ---
-      // A genuine head turn MUST:
-      // 1) Establish centered face baseline (0.75 <= jawRatio <= 1.30 for >= 2 frames)
-      // 2) Actively shift significantly away from center (jawRatio < 0.52 or jawRatio > 1.85)
-      // 3) Return to center (0.70 <= jawRatio <= 1.40)
+      // Relaxed yaw thresholds allow standard gentle head turns:
+      // 1) Establish centered face baseline (0.70 <= jawRatio <= 1.40 for >= 2 frames)
+      // 2) Actively shift away from center (jawRatio < 0.60 or jawRatio > 1.65)
+      // 3) Return to center (0.68 <= jawRatio <= 1.45)
       if (livenessHeadState === 'INITIAL') {
-        if (jawRatio >= 0.75 && jawRatio <= 1.30) {
+        if (jawRatio >= 0.70 && jawRatio <= 1.40) {
           livenessCenterFrames++;
           if (livenessCenterFrames >= 2) {
             livenessHeadState = 'CENTER_OBSERVED';
@@ -769,15 +770,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           livenessCenterFrames = 0;
         }
       } else if (livenessHeadState === 'CENTER_OBSERVED') {
-        if (jawRatio < 0.52) {
+        if (jawRatio < 0.60) {
           livenessHeadState = 'TURNED_AWAY';
           livenessTurnDirection = 'left';
-        } else if (jawRatio > 1.85) {
+        } else if (jawRatio > 1.65) {
           livenessHeadState = 'TURNED_AWAY';
           livenessTurnDirection = 'right';
         }
       } else if (livenessHeadState === 'TURNED_AWAY') {
-        if (jawRatio >= 0.70 && jawRatio <= 1.40) {
+        if (jawRatio >= 0.68 && jawRatio <= 1.45) {
           livenessHeadState = 'COMPLETED';
         }
       }

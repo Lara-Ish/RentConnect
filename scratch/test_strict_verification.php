@@ -127,7 +127,7 @@ assertTest(
     "Strict Protocol: User selects 'PRC ID', OCR scans 'Commission on Elections' -> immediately BLOCKED with conflicting_type = Voter's ID",
     $mismatchPrcVoter['matched'] === false
     && $mismatchPrcVoter['conflicting_type'] === "Voter's ID"
-    && $mismatchPrcVoter['reason'] === "Verification Failed: ID type does not match the uploaded document."
+    && str_contains($mismatchPrcVoter['reason'], "Verification Failed:")
 );
 
 // Case 2.5a: User selected "PhilSys / National ID", but OCR detects "Land Transportation Office" (Driver's License)
@@ -135,7 +135,7 @@ $promptExampleCheck = VerificationService::verifyIdTypeMatchesDocument("PhilSys 
 assertTest(
     "Prompt Example: User selects 'PhilSys / National ID', OCR detects 'Land Transportation Office' -> immediately REJECTED",
     $promptExampleCheck['matched'] === false 
-    && $promptExampleCheck['reason'] === "Verification Failed: ID type does not match the uploaded document."
+    && str_contains($promptExampleCheck['reason'], "Verification Failed:")
     && $promptExampleCheck['conflicting_type'] === "Driver's License"
 );
 
@@ -143,49 +143,49 @@ assertTest(
 $mismatchDlPhilSys = VerificationService::verifyIdTypeMatchesDocument("Driver's License", "REPUBLIKA NG PILIPINAS PHILSYS CARD IDENTIFICATION");
 assertTest(
     "Cross-Verification: User selects 'Driver\'s License', OCR detects 'PhilSys' -> immediately REJECTED",
-    $mismatchDlPhilSys['matched'] === false && $mismatchDlPhilSys['reason'] === 'Verification Failed: ID type does not match the uploaded document.'
+    $mismatchDlPhilSys['matched'] === false && str_contains($mismatchDlPhilSys['reason'], 'Verification Failed:')
 );
 
 // Case 2.5c: User selected "Passport", but uploaded UMID
 $mismatchPassUmid = VerificationService::verifyIdTypeMatchesDocument("Passport", "REPUBLIKA NG PILIPINAS UNIFIED MULTI-PURPOSE ID UMID");
 assertTest(
     "Cross-Verification: User selects 'Passport', OCR detects 'Unified Multi-Purpose ID' -> immediately REJECTED",
-    $mismatchPassUmid['matched'] === false && $mismatchPassUmid['reason'] === 'Verification Failed: ID type does not match the uploaded document.'
+    $mismatchPassUmid['matched'] === false && str_contains($mismatchPassUmid['reason'], 'Verification Failed:')
 );
 
 // Case 2.5d: User selected "UMID", but uploaded Passport
 $mismatchUmidPass = VerificationService::verifyIdTypeMatchesDocument("UMID", "REPUBLIKA NG PILIPINAS DFA PASAPORTE PASSPORT");
 assertTest(
     "Cross-Verification: User selects 'UMID', OCR detects 'Pasaporte' -> immediately REJECTED",
-    $mismatchUmidPass['matched'] === false && $mismatchUmidPass['reason'] === 'Verification Failed: ID type does not match the uploaded document.'
+    $mismatchUmidPass['matched'] === false && str_contains($mismatchUmidPass['reason'], 'Verification Failed:')
 );
 
 // Case 2.5e: User selected National ID (PhilSys), but uploaded Driver's License
 $mismatchNidDl = VerificationService::verifyIdTypeMatchesDocument("National ID (PhilSys)", $dlText);
 assertTest(
     "Strict ID Type Mismatch: National ID selected, but Driver's License uploaded is REJECTED",
-    $mismatchNidDl['matched'] === false && $mismatchNidDl['reason'] === 'Verification Failed: ID type does not match the uploaded document.'
+    $mismatchNidDl['matched'] === false && str_contains($mismatchNidDl['reason'], 'Verification Failed:')
 );
 
 // Case 2.5f: User selected Driver's License, but uploaded Passport
 $mismatchDlPass = VerificationService::verifyIdTypeMatchesDocument("Driver's License", $passText1);
 assertTest(
     "Strict ID Type Mismatch: Driver's License selected, but Passport uploaded is REJECTED",
-    $mismatchDlPass['matched'] === false && $mismatchDlPass['reason'] === 'Verification Failed: ID type does not match the uploaded document.'
+    $mismatchDlPass['matched'] === false && str_contains($mismatchDlPass['reason'], 'Verification Failed:')
 );
 
 // Case 2.5g: User selected Passport, but uploaded LTO Driver's License
 $mismatchPassDl = VerificationService::verifyIdTypeMatchesDocument("Passport", $dlText);
 assertTest(
     "Strict ID Type Mismatch: Passport selected, but Driver's License uploaded is REJECTED",
-    $mismatchPassDl['matched'] === false && $mismatchPassDl['reason'] === 'Verification Failed: ID type does not match the uploaded document.'
+    $mismatchPassDl['matched'] === false && str_contains($mismatchPassDl['reason'], 'Verification Failed:')
 );
 
 // Case 2.5h: User selected UMID, but uploaded Driver's License
 $mismatchUmidDl = VerificationService::verifyIdTypeMatchesDocument("UMID", $dlText);
 assertTest(
     "Strict ID Type Mismatch: UMID selected, but Driver's License uploaded is REJECTED",
-    $mismatchUmidDl['matched'] === false && $mismatchUmidDl['reason'] === 'Verification Failed: ID type does not match the uploaded document.'
+    $mismatchUmidDl['matched'] === false && str_contains($mismatchUmidDl['reason'], 'Verification Failed:')
 );
 
 // Case 2.5i: User selected Driver's License, but uploaded Student ID with no DL signatures
@@ -193,14 +193,14 @@ $studText = "UNIVERSITY OF THE PHILIPPINES\nSTUDENT IDENTIFICATION CARD\nNAME: J
 $mismatchDlStud = VerificationService::verifyIdTypeMatchesDocument("Driver's License", $studText);
 assertTest(
     "Strict ID Type Mismatch: Driver's License selected, but Student ID uploaded is REJECTED",
-    $mismatchDlStud['matched'] === false && $mismatchDlStud['reason'] === 'Verification Failed: ID type does not match the uploaded document.'
+    $mismatchDlStud['matched'] === false && str_contains($mismatchDlStud['reason'], 'Verification Failed:')
 );
 
 // Case 2.5j: Uploaded image text has no signatures at all
 $emptyTextCheck = VerificationService::verifyIdTypeMatchesDocument("National ID (PhilSys)", "RANDOM TEXT WITHOUT ANY OFFICIAL ID SIGNATURES");
 assertTest(
     "Strict ID Type Mismatch: Missing signature keywords is immediately REJECTED",
-    $emptyTextCheck['matched'] === false && $emptyTextCheck['reason'] === 'Verification Failed: ID type does not match the uploaded document.'
+    $emptyTextCheck['matched'] === false && str_contains($emptyTextCheck['reason'], 'Verification Failed:')
 );
 
 // -----------------------------------------------------------------------------

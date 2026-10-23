@@ -302,7 +302,7 @@ try {
             $idTypeCheck = VerificationService::verifyIdTypeMatchesDocument($idType, $rawOcrText);
 
             if (!$idTypeCheck['matched']) {
-                $typeFailureReason = $idTypeCheck['reason'] ?: "Verification Failed: ID type does not match the uploaded document.";
+                $typeFailureReason = $idTypeCheck['reason'] ?: "Verification Failed: The uploaded document does not match the selected ID type.";
                 $updateStmt = $pdo->prepare("
                     UPDATE users 
                     SET verification_status = 'unverified',

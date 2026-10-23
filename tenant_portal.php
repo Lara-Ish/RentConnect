@@ -433,19 +433,31 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
 
           <!-- Category 1: Dashboard -->
           <button type="button" class="sidebar-nav-item active" onclick="switchTenantSection('tenantOverview', this)" title="Dashboard">
-            <span class="nav-icon">🏠</span>
+            <span class="nav-icon">
+              <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-700">
+                <path stroke-linecap="round" stroke-linejoin="round" d="m2.25 12 8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
+              </svg>
+            </span>
             <span class="hide-on-retract">Dashboard</span>
           </button>
 
           <!-- Category 2: Log Maintenance -->
           <button type="button" class="sidebar-nav-item" onclick="switchTenantSection('tenantMaintenance', this)" title="Log Maintenance">
-            <span class="nav-icon">🛠️</span>
+            <span class="nav-icon">
+              <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-700">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M11.42 15.17 17.25 21A2.652 2.652 0 0 0 21 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 1 1-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.14a4.5 4.5 0 0 0 4.486-6.32l-3.276 3.277a3.004 3.004 0 0 1-2.25 2.25l-3.276-3.276a4.5 4.5 0 0 0-6.32 4.486c.048.58.072 1.193-.092 1.743" />
+              </svg>
+            </span>
             <span class="hide-on-retract">Log Maintenance</span>
           </button>
 
           <!-- Category 3: Upload Payment -->
           <button type="button" class="sidebar-nav-item" onclick="switchTenantSection('tenantPayments', this)" title="Upload Payment">
-            <span class="nav-icon">💳</span>
+            <span class="nav-icon">
+              <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-700">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 8.25h19.5M2.25 9h19.5m-16.5 5.25h6m-6 2.25h3m-3.75 3h15a2.25 2.25 0 0 0 2.25-2.25V6.75A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25v10.5A2.25 2.25 0 0 0 4.5 19.5Z" />
+              </svg>
+            </span>
             <span class="hide-on-retract">Upload Payment</span>
           </button>
         </div>
@@ -457,16 +469,26 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
           <?= htmlspecialchars($unit['unit_number']) ?> • ₱<?= number_format((float)$unit['monthly_rent'], 2) ?>/mo
         </div>
         <div class="sidebar-settings-container">
-          <button type="button" class="clay-btn clay-btn-secondary clay-btn-full" id="settingsToggleBtn" onclick="toggleSettingsMenu(event)" style="padding: 10px 16px; font-size: 13px;" title="Settings">
-            <span>⚙️</span> <span class="hide-on-retract">Settings</span>
+          <button type="button" class="clay-btn clay-btn-secondary clay-btn-full" id="settingsToggleBtn" onclick="toggleSettingsMenu(event)" style="padding: 10px 16px; font-size: 13px; display: flex; align-items: center; justify-content: center; gap: 8px;" title="Settings">
+            <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-700">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M10.343 3.94c.09-.542.56-.94 1.11-.94h1.093c.55 0 1.02.398 1.11.94l.149.894c.07.424.384.764.78.93.398.164.855.142 1.205-.108l.737-.527a1.125 1.125 0 0 1 1.45.12l.773.774c.39.389.44 1.002.12 1.45l-.527.737c-.25.35-.272.806-.107 1.204.165.397.505.71.93.78l.893.15c.543.09.94.559.94 1.109v1.094c0 .55-.397 1.02-.94 1.11l-.894.149c-.424.07-.764.383-.929.78-.165.398-.143.854.107 1.204l.527.738c.32.447.27.1.06-.12 1.45l-.774.773a1.125 1.125 0 0 1-1.449.12l-.738-.527c-.35-.25-.806-.272-1.203-.107-.398.165-.71.505-.781.929l-.149.894c-.09.542-.56.94-1.11.94h-1.094c-.55 0-1.019-.398-1.11-.94l-.148-.894c-.071-.424-.384-.764-.781-.93-.398-.164-.854-.142-1.204.108l-.738.527c-.447.32-1.06.27-1.45-.12l-.773-.774a1.125 1.125 0 0 1-.12-1.45l.527-.737c.25-.35.272-.806.108-1.204-.165-.397-.506-.71-.93-.78l-.894-.15c-.542-.09-.94-.56-.94-1.109v-1.094c0-.55.398-1.02.94-1.11l.894-.149c.424-.07.765-.383.93-.78.165-.398.143-.854-.108-1.204l-.526-.738a1.125 1.125 0 0 1 .12-1.45l.773-.773a1.125 1.125 0 0 1 1.45-.12l.737.527c.35.25.807.272 1.204.107.397-.165.71-.505.78-.929l.15-.894Z" />
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+            </svg>
+            <span class="hide-on-retract">Settings</span>
           </button>
           <!-- Settings Dropup Menu -->
           <div class="clay-settings-dropdown" id="settingsDropdown">
-            <button type="button" class="settings-dropdown-item" onclick="openProfileView()">
-              <span>👤</span> <span>Profile</span>
+            <button type="button" class="settings-dropdown-item" onclick="openProfileView()" style="display: flex; align-items: center; gap: 8px;">
+              <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-700" style="width: 18px; height: 18px;">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z" />
+              </svg>
+              <span>Profile</span>
             </button>
-            <a href="logout.php" class="settings-dropdown-item settings-item-danger">
-              <span>🚪</span> <span>Sign Out</span>
+            <a href="logout.php" class="settings-dropdown-item settings-item-danger" style="display: flex; align-items: center; gap: 8px;">
+              <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-700" style="width: 18px; height: 18px; color: inherit;">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9" />
+              </svg>
+              <span>Sign Out</span>
             </a>
           </div>
         </div>
@@ -491,8 +513,10 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
             <span class="landlord-header-role">Resident • <?= htmlspecialchars($unit['unit_number']) ?></span>
           </div>
 
-          <div class="header-avatar-badge tenant-avatar" title="Resident Account">
-            🔑
+          <div class="header-avatar-badge tenant-avatar" title="Resident Account" style="display: flex; align-items: center; justify-content: center;">
+            <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-700">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 0 1 3 3m3 0a6 6 0 0 1-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1 1 21.75 8.25Z" />
+            </svg>
           </div>
         </div>
       </header>
@@ -701,16 +725,27 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
 
               <!-- Maintenance Photo Upload Field -->
               <div class="form-group" style="margin-top: 14px;">
-                <label for="ticketPhotos" class="form-label" style="display: flex; justify-content: space-between; align-items: center;">
+                <label for="ticketPhotos" class="form-label" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
                   <span>Attach Photos of Item Needing Repair (Optional)</span>
                   <span style="font-size: 11.5px; color: var(--text-muted); font-weight: 500;">JPG, PNG, WEBP</span>
                 </label>
-                <input type="file" id="ticketPhotos" name="maintenance_photos[]" accept="image/*" multiple class="clay-input" style="padding: 9px 12px; cursor: pointer; font-size: 13px;">
+                <div class="file-upload-wrapper" style="position: relative;">
+                  <input type="file" id="ticketPhotos" name="maintenance_photos[]" accept="image/*" multiple style="position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; z-index: 5;">
+                  <label for="ticketPhotos" class="clay-btn clay-btn-secondary" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 11px 16px; cursor: pointer;">
+                    <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-700">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
+                    </svg>
+                    <span id="ticketPhotosUploadLabel" style="font-size: 13px; font-weight: 700; color: #475569;">Attach Photos of Item</span>
+                  </label>
+                </div>
                 <div id="ticketPhotosPreview" style="display: none; margin-top: 10px; gap: 8px; flex-wrap: wrap;"></div>
               </div>
 
-              <button type="submit" class="clay-btn clay-btn-primary clay-btn-full" id="btnLogTicket">
-                <span>🛠️ Dispatch Maintenance Ticket</span>
+              <button type="submit" class="clay-btn clay-btn-primary clay-btn-full" id="btnLogTicket" style="display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 16px;">
+                <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6" style="color: #ffffff;">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M11.42 15.17 17.25 21A2.652 2.652 0 0 0 21 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 1 1-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.14a4.5 4.5 0 0 0 4.486-6.32l-3.276 3.277a3.004 3.004 0 0 1-2.25 2.25l-3.276-3.276a4.5 4.5 0 0 0-6.32 4.486c.048.58.072 1.193-.092 1.743" />
+                </svg>
+                <span>Dispatch Maintenance Ticket</span>
               </button>
             </form>
           </div>
@@ -1173,20 +1208,15 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
         <button type="button" class="btn-remove-file" onclick="closeVerifyAccountModal()" title="Close">✕</button>
       </div>
 
-      <!-- Step Progress Indicator: 1. Upload ID -> 2. Face Capture -> 3. Live Testing -->
-      <div class="verification-step-indicator" style="display: flex; align-items: center; gap: 6px; margin-bottom: 20px; padding: 6px; background: rgba(226, 232, 240, 0.6); border-radius: 14px;">
-        <div id="stepPill1" class="step-pill active" style="flex: 1; padding: 8px 10px; border-radius: 10px; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 11.5px; font-weight: 800; background: var(--clay-surface); color: var(--clay-primary-dark); box-shadow: var(--clay-button-shadow); transition: all 0.2s ease;">
-          <span style="width: 20px; height: 20px; border-radius: 50%; background: var(--clay-primary); color: white; display: inline-flex; align-items: center; justify-content: center; font-size: 10.5px;">1</span>
-          <span>Upload ID</span>
+      <!-- Step Progress Indicator: 1. Upload ID -> 2. Live Testing -->
+      <div class="verification-step-indicator" style="display: flex; align-items: center; gap: 10px; margin-bottom: 20px; padding: 6px; background: rgba(226, 232, 240, 0.6); border-radius: 14px;">
+        <div id="stepPill1" class="step-pill active" style="flex: 1; padding: 8px 12px; border-radius: 10px; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 12px; font-weight: 800; background: var(--clay-surface); color: var(--clay-primary-dark); box-shadow: var(--clay-button-shadow); transition: all 0.2s ease;">
+          <span style="width: 22px; height: 22px; border-radius: 50%; background: var(--clay-primary); color: white; display: inline-flex; align-items: center; justify-content: center; font-size: 11px;">1</span>
+          <span>Upload Valid ID</span>
         </div>
-        <div style="color: var(--text-muted); font-size: 13px; font-weight: 700;">→</div>
-        <div id="stepPill2" class="step-pill" style="flex: 1; padding: 8px 10px; border-radius: 10px; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 11.5px; font-weight: 800; background: transparent; color: var(--text-muted); transition: all 0.2s ease;">
-          <span style="width: 20px; height: 20px; border-radius: 50%; background: #cbd5e1; color: #475569; display: inline-flex; align-items: center; justify-content: center; font-size: 10.5px;">2</span>
-          <span>Face Capture</span>
-        </div>
-        <div style="color: var(--text-muted); font-size: 13px; font-weight: 700;">→</div>
-        <div id="stepPill3" class="step-pill" style="flex: 1; padding: 8px 10px; border-radius: 10px; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 11.5px; font-weight: 800; background: transparent; color: var(--text-muted); transition: all 0.2s ease;">
-          <span style="width: 20px; height: 20px; border-radius: 50%; background: #cbd5e1; color: #475569; display: inline-flex; align-items: center; justify-content: center; font-size: 10.5px;">3</span>
+        <div style="color: var(--text-muted); font-size: 14px; font-weight: 700;">→</div>
+        <div id="stepPill2" class="step-pill" style="flex: 1; padding: 8px 12px; border-radius: 10px; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 12px; font-weight: 800; background: transparent; color: var(--text-muted); transition: all 0.2s ease;">
+          <span style="width: 22px; height: 22px; border-radius: 50%; background: #cbd5e1; color: #475569; display: inline-flex; align-items: center; justify-content: center; font-size: 11px;">2</span>
           <span>Live Testing</span>
         </div>
       </div>
@@ -1251,74 +1281,16 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
           <div style="display: flex; gap: 12px; margin-top: 24px;">
             <button type="button" class="clay-btn clay-btn-secondary" style="flex: 1;" onclick="closeVerifyAccountModal()">Cancel</button>
             <button type="button" class="clay-btn clay-btn-primary" style="flex: 2;" id="btnNextStep1" onclick="goToVerificationStep(2)">
-              <span>Next: Face Capture →</span>
-            </button>
-          </div>
-        </div>
-
-        <!-- ================= STEP 2: STATIC FACE CAPTURE (PHASE 1) ================= -->
-        <div id="verifyStep2View" style="display: none;">
-          <div style="text-align: center; margin-bottom: 14px;">
-            <h3 style="font-size: 15px; font-weight: 800; color: #0f172a; margin: 0 0 4px 0;">Step 2: Face Photo Capture</h3>
-            <p style="font-size: 12px; color: var(--text-muted); margin: 0;">Look directly at the camera and capture a clear, well-lit photo of your face.</p>
-          </div>
-
-          <!-- Camera / Preview Box (Unmasked full feed) -->
-          <div style="position: relative; width: 100%; max-width: 380px; height: 260px; margin: 0 auto; border-radius: 18px; overflow: hidden; background: #0f172a; box-shadow: var(--clay-sunken-shadow); display: flex; align-items: center; justify-content: center;">
-            <!-- Live Webcam Video Stream (Horizontally flipped to act as a natural mirror) -->
-            <video id="webcamVideo" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); -webkit-transform: scaleX(-1);"></video>
-
-            <!-- Hidden canvas to grab snapshot -->
-            <canvas id="faceCaptureCanvas" style="display: none;"></canvas>
-
-            <!-- Real-Time Dynamic Status Pill -->
-            <div id="tenantFaceStatusPill" class="face-status-pill">
-              <span id="tenantFaceStatusIcon">📸</span>
-              <span id="tenantFaceStatusText">Look directly at camera</span>
-            </div>
-
-            <!-- Captured Snapshot Preview Overlay -->
-            <div id="capturedSnapshotWrapper" style="display: none; position: absolute; inset: 0; background: #0f172a; z-index: 15;">
-              <img id="capturedSnapshotImg" src="" alt="Captured Face" style="width: 100%; height: 100%; object-fit: cover;">
-              <div style="position: absolute; bottom: 12px; left: 16px; right: 16px; background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(4px); color: #22c55e; padding: 6px 12px; border-radius: 10px; font-size: 12px; font-weight: 800; text-align: center;">
-                ✓ Static face photo captured
-              </div>
-            </div>
-
-            <!-- Camera Loading / Status Message -->
-            <div id="cameraStatusMsg" style="display: none; position: absolute; inset: 0; background: #0f172a; color: #fff; padding: 20px; text-align: center; flex-direction: column; align-items: center; justify-content: center; gap: 8px; z-index: 20;">
-              <div style="font-size: 32px;">📷</div>
-              <div id="cameraStatusText" style="font-size: 13px; font-weight: 600;">Starting camera...</div>
-              <button type="button" class="clay-btn clay-btn-secondary" style="font-size: 11.5px; padding: 4px 12px; margin-top: 6px;" onclick="startWebcam()">Retry Camera</button>
-            </div>
-          </div>
-
-          <!-- Capture & Retake Controls -->
-          <div style="display: flex; justify-content: center; gap: 12px; margin-top: 14px;">
-            <button type="button" id="btnTakeStaticPhoto" class="clay-btn clay-btn-primary" style="padding: 10px 22px; font-weight: 800;" onclick="takeStaticFaceSnapshot()">
-              <span>📸 Capture Photo</span>
-            </button>
-            <button type="button" id="btnRetakeFace" class="clay-btn clay-btn-secondary" style="display: none; padding: 10px 20px;" onclick="retakeLiveFace()">
-              <span>Retake Photo</span>
-            </button>
-          </div>
-
-          <!-- Navigation Buttons -->
-          <div style="display: flex; gap: 12px; margin-top: 20px;">
-            <button type="button" class="clay-btn clay-btn-secondary" style="flex: 1;" id="btnBackToStep1" onclick="goToVerificationStep(1)">
-              <span>← Back to ID</span>
-            </button>
-            <button type="button" class="clay-btn clay-btn-primary" style="flex: 2;" id="btnNextStep2" onclick="goToVerificationStep(3)" disabled>
               <span>Next: Live Testing →</span>
             </button>
           </div>
         </div>
 
-        <!-- ================= STEP 3: DEDICATED LIVE TESTING (PHASE 2) ================= -->
-        <div id="verifyStep3View" style="display: none;">
+        <!-- ================= STEP 2: DEDICATED LIVE TESTING & AUTO-CAPTURE ================= -->
+        <div id="verifyStep2View" style="display: none;">
           <div style="text-align: center; margin-bottom: 12px;">
-            <h3 style="font-size: 15px; font-weight: 800; color: #0f172a; margin: 0 0 4px 0;">Step 3: Dedicated Live Testing</h3>
-            <p style="font-size: 12px; color: var(--text-muted); margin: 0;">Perform the physical action to verify liveness. <strong style="color: #475569;">No photos are captured or saved.</strong></p>
+            <h3 style="font-size: 15px; font-weight: 800; color: #0f172a; margin: 0 0 4px 0;">Step 2: Dedicated Live Testing</h3>
+            <p style="font-size: 12px; color: var(--text-muted); margin: 0;">Perform the physical action to verify liveness and automatically capture your face photo.</p>
           </div>
 
           <!-- Active Movement Instruction Banner -->
@@ -1334,9 +1306,12 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
             </div>
           </div>
 
-          <!-- Live Webcam Feed for Pure Landmark Motion Analysis -->
+          <!-- Live Webcam Feed for Pure Landmark Motion Analysis & Auto-Capture -->
           <div style="position: relative; width: 100%; max-width: 380px; height: 260px; margin: 0 auto; border-radius: 18px; overflow: hidden; background: #0f172a; box-shadow: var(--clay-sunken-shadow); display: flex; align-items: center; justify-content: center;">
             <video id="livenessVideo" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); -webkit-transform: scaleX(-1);"></video>
+
+            <!-- Hidden canvas to grab auto-capture snapshot -->
+            <canvas id="livenessCaptureCanvas" style="display: none;"></canvas>
 
             <!-- Guide oval cutout -->
             <div class="gcash-camera-mask face-oval-guide">
@@ -1353,7 +1328,7 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
             <div id="livenessFinalizingOverlay" style="display: none; position: absolute; inset: 0; background: rgba(15, 23, 42, 0.92); z-index: 25; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: white; padding: 20px; text-align: center;">
               <div style="font-size: 34px;">✨</div>
               <div style="font-size: 15px; font-weight: 800; color: #34d399;" id="livenessFinalizingTitle">Action Confirmed!</div>
-              <div style="font-size: 12.5px; color: #94a3b8;" id="livenessFinalizingSub">Officially marking account as verified...</div>
+              <div style="font-size: 12.5px; color: #94a3b8;" id="livenessFinalizingSub">Comparing face with your ID...</div>
             </div>
           </div>
 
@@ -1364,10 +1339,10 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
             </div>
           </div>
 
-          <!-- Navigation Buttons: Back button only, completely automated detection -->
+          <!-- Navigation Buttons: Back button directly to Step 1 -->
           <div style="display: flex; gap: 12px; margin-top: 20px;">
-            <button type="button" class="clay-btn clay-btn-secondary" style="width: 100%;" id="btnBackToStep2" onclick="goToVerificationStep(2)">
-              <span>← Back to Face Photo</span>
+            <button type="button" class="clay-btn clay-btn-secondary" style="width: 100%;" id="btnBackToStep1" onclick="goToVerificationStep(1)">
+              <span>← Back to ID</span>
             </button>
           </div>
         </div>
@@ -1594,7 +1569,7 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
 
         // 6. Global outside click handler to dismiss settings dropdown
         document.addEventListener('click', (e) => {
-          if (!e.target.closest('.sidebar-settings-container')) {
+          if (!e.target.closest('#settingsToggleBtn') && !e.target.closest('#settingsDropdown')) {
             closeSettingsMenu();
           }
         });
@@ -1740,8 +1715,7 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
     }
 
     function closeVerifyAccountModal() {
-      stopWebcam();
-      stopLivenessTracking();
+      stopLivenessCamera();
       if (typeof resetTenantLivenessState === 'function') {
         resetTenantLivenessState();
       }
@@ -1754,14 +1728,9 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
       const f = document.getElementById('verifyAccountForm');
       if (f) f.reset();
       removeIdFile();
-      capturedFaceBlob = null;
-      capturedFaceDataUrl = '';
-      isFaceCaptureValid = false;
       resetLivenessAntiSpoofingState();
       heldOcrRawText = '';
       isLivenessConfirmed = false;
-      const snapWrapper = document.getElementById('capturedSnapshotWrapper');
-      if (snapWrapper) snapWrapper.style.display = 'none';
       const alertBox = document.getElementById('verifyModalAlert');
       if (alertBox) {
         alertBox.style.display = 'none';
@@ -1779,11 +1748,9 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
 
       const v1 = document.getElementById('verifyStep1View');
       const v2 = document.getElementById('verifyStep2View');
-      const v3 = document.getElementById('verifyStep3View');
 
       const p1 = document.getElementById('stepPill1');
       const p2 = document.getElementById('stepPill2');
-      const p3 = document.getElementById('stepPill3');
 
       function setPillActive(pill, isActive) {
         if (!pill) return;
@@ -1830,65 +1797,13 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
           return;
         }
 
-        // Transition to Step 2 (Phase 1: Static Face Capture)
+        // Transition directly to Step 2 (Live Testing Interface)
         currentVerificationStep = 2;
         if (v1) v1.style.display = 'none';
         if (v2) v2.style.display = 'block';
-        if (v3) v3.style.display = 'none';
 
         setPillActive(p1, false);
         setPillActive(p2, true);
-        setPillActive(p3, false);
-
-        // Stop any liveness tracking - Strictly NO active liveness tests in Step 2!
-        stopLivenessTracking();
-
-        // Seamless navigation check: If user already captured a face photo, preserve & display it
-        const snapWrapper = document.getElementById('capturedSnapshotWrapper');
-        const snapImg = document.getElementById('capturedSnapshotImg');
-        const btnTake = document.getElementById('btnTakeStaticPhoto');
-        const btnRetake = document.getElementById('btnRetakeFace');
-        const btnNext = document.getElementById('btnNextStep2') || document.getElementById('btnSubmitFaceCompare');
-
-        if (capturedFaceDataUrl) {
-          if (snapImg) snapImg.src = capturedFaceDataUrl;
-          if (snapWrapper) snapWrapper.style.display = 'block';
-          if (btnTake) btnTake.style.display = 'none';
-          if (btnRetake) btnRetake.style.display = 'inline-flex';
-          if (btnNext) btnNext.disabled = false;
-          updateTenantStatusBadge('✓', 'Face photo ready. Click Next to proceed.', 'holding');
-        } else {
-          if (snapWrapper) snapWrapper.style.display = 'none';
-          if (btnTake) {
-            btnTake.style.display = 'inline-flex';
-            btnTake.disabled = false;
-          }
-          if (btnRetake) btnRetake.style.display = 'none';
-          if (btnNext) btnNext.disabled = true;
-          updateTenantStatusBadge('📸', 'Look directly at camera', 'normal');
-          startWebcam();
-        }
-
-      } else if (stepNum === 3) {
-        // Validate Step 2: Photo must be captured before entering Live Testing
-        if (!capturedFaceDataUrl) {
-          showToast('Please capture your face photo before proceeding to Live Testing.', 'error');
-          goToVerificationStep(2);
-          return;
-        }
-
-        // Transition to Step 3 (Phase 2: Dedicated Live Testing Tab)
-        // In this final tab, do NOT capture or save any photos!
-        currentVerificationStep = 3;
-        stopWebcam(); // Cleanly stop Step 2 webcam stream
-
-        if (v1) v1.style.display = 'none';
-        if (v2) v2.style.display = 'none';
-        if (v3) v3.style.display = 'block';
-
-        setPillActive(p1, false);
-        setPillActive(p2, false);
-        setPillActive(p3, true);
 
         // Start dedicated liveness webcam and facial landmark tracking loop
         startLivenessTestingTab();
@@ -1896,16 +1811,13 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
       } else {
         // Step 1: Upload ID
         currentVerificationStep = 1;
-        stopWebcam();
-        stopLivenessTracking();
+        stopLivenessCamera();
 
         if (v1) v1.style.display = 'block';
         if (v2) v2.style.display = 'none';
-        if (v3) v3.style.display = 'none';
 
         setPillActive(p1, true);
         setPillActive(p2, false);
-        setPillActive(p3, false);
 
         // Seamless "Back" navigation: Preserve selectedIdFile, preview card, and idType
         if (selectedIdFile) {
@@ -1918,124 +1830,12 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
     }
 
     // =========================================================================
-    // PHASE 1: STATIC FACE PHOTO CAPTURE (VANILLA JS)
-    // 1. Standard manual image capture holding photo in temporary client state.
-    // 2. Seamless capture without frontend quality or presence validation.
-    // 3. ZERO backend/database calls made during Phase 2.
-    // =========================================================================
-
-    /**
-     * Manual static photo snapshot from mirrored video feed.
-     * Captures photo seamlessly without frontend quality or presence validation.
-     */
-    function takeStaticFaceSnapshot() {
-      const video = document.getElementById('webcamVideo');
-      const canvas = document.getElementById('faceCaptureCanvas');
-      const snapWrapper = document.getElementById('capturedSnapshotWrapper');
-      const snapImg = document.getElementById('capturedSnapshotImg');
-      const btnTake = document.getElementById('btnTakeStaticPhoto');
-      const btnRetake = document.getElementById('btnRetakeFace');
-      const btnNext = document.getElementById('btnNextStep2') || document.getElementById('btnSubmitFaceCompare');
-      const alertBox = document.getElementById('verifyModalAlert');
-
-      if (!video || video.readyState < 2 || video.videoWidth === 0) {
-        showToast('Webcam is not ready yet. Please wait...', 'error');
-        return;
-      }
-
-      const width = video.videoWidth || 640;
-      const height = video.videoHeight || 480;
-      canvas.width = width;
-      canvas.height = height;
-
-      // Draw mirrored video frame to canvas using ctx.scale(-1, 1)
-      const ctx = canvas.getContext('2d');
-      ctx.save();
-      ctx.scale(-1, 1);
-      ctx.drawImage(video, -width, 0, width, height);
-      ctx.restore();
-
-      // Capture photo data directly without frontend quality/presence blocking
-      isFaceCaptureValid = true;
-      capturedFaceDataUrl = canvas.toDataURL('image/jpeg', 0.92);
-      canvas.toBlob((blob) => {
-        capturedFaceBlob = blob;
-      }, 'image/jpeg', 0.92);
-
-      // Cleanly stop webcam now that snapshot is captured
-      stopWebcam();
-
-      if (alertBox) {
-        alertBox.style.display = 'none';
-        alertBox.innerHTML = '';
-      }
-
-      // Display snapshot preview
-      if (snapImg) snapImg.src = capturedFaceDataUrl;
-      if (snapWrapper) snapWrapper.style.display = 'block';
-
-      if (btnTake) {
-        btnTake.style.display = 'none';
-        btnTake.disabled = false;
-      }
-      if (btnRetake) btnRetake.style.display = 'inline-flex';
-      if (btnNext) btnNext.disabled = false;
-
-      updateTenantStatusBadge('✓', 'Photo captured! Click Next: Live Testing', 'holding');
-    }
-
-    /**
-     * Retake static face photo
-     */
-    function retakeLiveFace() {
-      capturedFaceBlob = null;
-      capturedFaceDataUrl = '';
-      isFaceCaptureValid = false;
-
-      const snapWrapper = document.getElementById('capturedSnapshotWrapper');
-      if (snapWrapper) snapWrapper.style.display = 'none';
-
-      const btnTake = document.getElementById('btnTakeStaticPhoto');
-      const btnRetake = document.getElementById('btnRetakeFace');
-      const btnNext = document.getElementById('btnNextStep2') || document.getElementById('btnSubmitFaceCompare');
-
-      if (btnTake) {
-        btnTake.style.display = 'inline-flex';
-        btnTake.disabled = false;
-      }
-      if (btnRetake) btnRetake.style.display = 'none';
-      if (btnNext) btnNext.disabled = true;
-
-      const alertBox = document.getElementById('verifyModalAlert');
-      if (alertBox) {
-        alertBox.style.display = 'none';
-        alertBox.innerHTML = '';
-      }
-
-      updateTenantStatusBadge('📸', 'Look directly at camera', 'normal');
-      startWebcam();
-    }
-
-    /**
-     * Client-side advance from Step 2 to Step 3 (Strictly NO network or DB calls in Phase 2)
-     */
-    function submitFaceCompare() {
-      if (!capturedFaceDataUrl) {
-        showToast('Please capture your face photo first.', 'error');
-        return;
-      }
-      goToVerificationStep(3);
-    }
-
-    // =========================================================================
-    // PHASE 2: DEDICATED LIVENESS TESTING TAB (VANILLA JS & face-api.js)
-    // 1. In this final tab, do NOT capture or save any photos!
-    // 2. Camera feed is monitored purely for real-time physical movement:
-    //    - "Blink your eyes" (Eye Aspect Ratio EAR < 0.28)
-    //    - "Move your head to the left or right" (Jaw/Nose displacement ratio)
-    // 3. When physical action is confirmed:
-    //    - Automatically sends action confirmation signal to verify_face.php (action: 'complete_liveness')
-    //    - PHP backend officially marks account as verified in MySQL database.
+    // DEDICATED LIVENESS TESTING & AUTO-CAPTURE (VANILLA JS & face-api.js)
+    // 1. Monitors camera feed purely for real-time physical movement.
+    // 2. Mathematical state-change anti-spoofing condition.
+    // 3. Auto-captures the frame at the moment liveness is verified.
+    // 4. Applies ctx.scale(-1, 1) mirror effect to the canvas.
+    // 5. Automatically submits Base64 frame + ID image to verify_face.php.
     // =========================================================================
 
     let livenessStream = null;
@@ -2111,7 +1911,7 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
      * Start camera & tracking in Dedicated Liveness Testing Tab
      */
     async function startLivenessTestingTab() {
-      stopLivenessTracking();
+      pauseLivenessTracking();
       resetLivenessAntiSpoofingState();
       isLivenessConfirmed = false;
 
@@ -2123,15 +1923,17 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
       const video = document.getElementById('livenessVideo');
       if (!video) return;
 
-      // Start webcam stream for liveness feed
+      // Start webcam stream for liveness feed if not already running
       try {
-        if (!livenessStream) {
+        if (!livenessStream || !livenessStream.active) {
           livenessStream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
             audio: false
           });
         }
-        video.srcObject = livenessStream;
+        if (video.srcObject !== livenessStream) {
+          video.srcObject = livenessStream;
+        }
         await video.play().catch(() => {});
       } catch (err) {
         console.warn('Liveness camera access:', err);
@@ -2145,12 +1947,18 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
       scheduleNextLivenessStep();
     }
 
-    function stopLivenessTracking() {
+    // Pause tracking evaluation loop without cutting the active camera stream
+    function pauseLivenessTracking() {
       isLivenessTrackingActive = false;
       if (livenessTrackingTimerId) {
         clearTimeout(livenessTrackingTimerId);
         livenessTrackingTimerId = null;
       }
+    }
+
+    // Completely stops camera stream and releases webcam hardware on modal exit
+    function stopLivenessCamera() {
+      pauseLivenessTracking();
       if (livenessStream) {
         try {
           livenessStream.getTracks().forEach(t => t.stop());
@@ -2159,6 +1967,11 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
       }
       const v = document.getElementById('livenessVideo');
       if (v) v.srcObject = null;
+    }
+
+    // Backwards-compatible alias for camera cleanup
+    function stopLivenessTracking() {
+      pauseLivenessTracking();
     }
 
     function scheduleNextLivenessStep() {
@@ -2178,8 +1991,8 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
     }
 
     /**
-     * Pure physical motion detection (Blink or Head Turn) using strict state-change anti-spoofing.
-     * Strictly does NOT capture or save any photos!
+     * Pure physical motion detection (Blink or Head Turn) using relaxed thresholds & real-time landmark tracking.
+     * Strictly does NOT gatekeep with custom pixel variance, brightness, or blurriness heuristics.
      * Mathematical state machine prevents static photo / phone screen spoofing.
      */
     async function executeLivenessDetectionStep() {
@@ -2190,18 +2003,21 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
         return;
       }
 
+      // Optimized Model Configurations: scoreThreshold relaxed to 0.3, inputSize increased to 320 (multiple of 32)
+      // Gives the AI sufficient pixel data to reliably track landmarks under standard indoor lighting without false rejections
       let detection = null;
       if (typeof faceapi !== 'undefined' && faceapi.nets.tinyFaceDetector && faceapi.nets.tinyFaceDetector.params) {
         try {
-          const detectorOptions = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 });
+          const detectorOptions = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.3 });
           detection = await faceapi.detectSingleFace(video, detectorOptions).withFaceLandmarks();
         } catch (err) {
           console.warn('faceapi tracking warning:', err);
         }
       }
 
+      // Seamless real-time tracking: Do not display "no face detected" or "image too blurry" errors on the overlay
       if (!detection || !detection.landmarks) {
-        updateLivenessStatusBadge('🔍', 'Position face in frame', 'needs-center');
+        updateLivenessStatusBadge('👀', 'Look directly at camera to start', 'challenge');
         return;
       }
 
@@ -2209,9 +2025,13 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
         (typeof detection.landmarks.getPositions === 'function' ? detection.landmarks.getPositions() : null);
 
       if (!landmarks || landmarks.length < 68) {
-        updateLivenessStatusBadge('🔍', 'Position face in frame', 'needs-center');
+        updateLivenessStatusBadge('👀', 'Look directly at camera to start', 'challenge');
         return;
       }
+
+      // Strict Removal of Custom Gatekeeping:
+      // No custom pixel variance, brightness, or Laplacian blur heuristics are applied to block the test.
+      // As long as the 68 facial landmarks are plotted, the system immediately proceeds to EAR and Yaw tracking.
 
       // 1. Calculate Eye Aspect Ratio (EAR) using 68 landmarks
       // Left eye: 36, 37, 38, 39, 40, 41
@@ -2243,16 +2063,16 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
       const jawRatio = dLeft / Math.max(0.001, dRight);
 
       // =========================================================================
-      // STRICT ANTI-SPOOFING STATE MACHINES (PREVENTS STATIC PHOTO/SCREEN BYPASS)
+      // RELAXED ANTI-SPOOFING STATE MACHINES (STANDARD INDOOR LIGHTING & CAMERAS)
       // =========================================================================
 
       // --- BLINK STATE MACHINE ---
-      // A genuine blink MUST:
-      // 1) Establish open-eye baseline (avgEAR >= 0.26 for >= 2 frames)
-      // 2) Actively drop below threshold (avgEAR < 0.22, eyes closed)
-      // 3) Rise back above threshold (avgEAR >= 0.25, eyes re-opened)
+      // Relaxed thresholds prevent false rejections while verifying genuine motion:
+      // 1) Establish open-eye baseline (avgEAR >= 0.24 for >= 2 frames)
+      // 2) Actively drop below threshold (avgEAR < 0.20, eyes closed)
+      // 3) Rise back above threshold (avgEAR >= 0.23, eyes re-opened)
       if (livenessBlinkState === 'INITIAL') {
-        if (avgEAR >= 0.26) {
+        if (avgEAR >= 0.24) {
           livenessOpenFrames++;
           if (livenessOpenFrames >= 2) {
             livenessBlinkState = 'OPEN_OBSERVED';
@@ -2261,22 +2081,22 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
           livenessOpenFrames = 0;
         }
       } else if (livenessBlinkState === 'OPEN_OBSERVED') {
-        if (avgEAR < 0.22) {
+        if (avgEAR < 0.20) {
           livenessBlinkState = 'DROPPED_CLOSED';
         }
       } else if (livenessBlinkState === 'DROPPED_CLOSED') {
-        if (avgEAR >= 0.25) {
+        if (avgEAR >= 0.23) {
           livenessBlinkState = 'COMPLETED';
         }
       }
 
       // --- HEAD TURN STATE MACHINE ---
-      // A genuine head turn MUST:
-      // 1) Establish centered face baseline (0.75 <= jawRatio <= 1.30 for >= 2 frames)
-      // 2) Actively shift significantly away from center (jawRatio < 0.52 or jawRatio > 1.85)
-      // 3) Return to center (0.70 <= jawRatio <= 1.40)
+      // Relaxed yaw thresholds allow standard gentle head turns without losing tracking:
+      // 1) Establish centered face baseline (0.70 <= jawRatio <= 1.40 for >= 2 frames)
+      // 2) Actively shift away from center (jawRatio < 0.60 or jawRatio > 1.65)
+      // 3) Return to center (0.68 <= jawRatio <= 1.45)
       if (livenessHeadState === 'INITIAL') {
-        if (jawRatio >= 0.75 && jawRatio <= 1.30) {
+        if (jawRatio >= 0.70 && jawRatio <= 1.40) {
           livenessCenterFrames++;
           if (livenessCenterFrames >= 2) {
             livenessHeadState = 'CENTER_OBSERVED';
@@ -2285,31 +2105,37 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
           livenessCenterFrames = 0;
         }
       } else if (livenessHeadState === 'CENTER_OBSERVED') {
-        if (jawRatio < 0.52) {
+        if (jawRatio < 0.60) {
           livenessHeadState = 'TURNED_AWAY';
           livenessTurnDirection = 'left';
-        } else if (jawRatio > 1.85) {
+        } else if (jawRatio > 1.65) {
           livenessHeadState = 'TURNED_AWAY';
           livenessTurnDirection = 'right';
         }
       } else if (livenessHeadState === 'TURNED_AWAY') {
-        if (jawRatio >= 0.70 && jawRatio <= 1.40) {
+        if (jawRatio >= 0.68 && jawRatio <= 1.45) {
           livenessHeadState = 'COMPLETED';
         }
       }
 
       // --- EVALUATION ---
-      // If landmarks are statically frozen (2D photo / phone screen held to camera),
-      // the state machine remains at OPEN_OBSERVED / CENTER_OBSERVED indefinitely.
-      // Verification will NEVER trigger without the full dynamic motion cycle.
       if (livenessBlinkState === 'COMPLETED' || livenessHeadState === 'COMPLETED') {
         const triggerReason = (livenessBlinkState === 'COMPLETED')
           ? 'Blink cycle confirmed (open -> closed -> open)'
           : 'Head turn cycle confirmed (center -> turned -> center)';
         console.log('Liveness motion confirmed:', triggerReason);
-        await completeLivenessVerification(triggerReason);
+
+        // Pause evaluation tracking loop, keeping the live camera stream active for snapshot
+        pauseLivenessTracking();
+
+        // 1 second of stillness after completing movement to eliminate motion blur and ensure eyes are open
+        updateLivenessStatusBadge('📸', 'Movement verified! Hold still for photo...', 'perfect-capturing');
+
+        setTimeout(async () => {
+          await captureAndSubmitLiveVerification(triggerReason);
+        }, 1000);
       } else {
-        // Dynamic guidance feedback based on current cycle state
+        // Seamless real-time tracking feedback (No "no face detected" or "blurry" errors)
         if (livenessBlinkState === 'DROPPED_CLOSED') {
           updateLivenessStatusBadge('👀', 'Eyes closed detected! Re-open eyes...', 'challenge');
         } else if (livenessHeadState === 'TURNED_AWAY') {
@@ -2323,49 +2149,61 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
     }
 
     /**
-     * Action confirmed: Automatic liveness detection passed.
-     * Strictly executes backend verification (OCR + Face++ Compare + Database update)
-     * ONLY after Phase 3 is automatically passed, using held ID photo and captured face snapshot.
+     * Auto-Capture on Liveness Detection & Submit Unified Verification
+     * Pauses the video feed, draws current frame to canvas with ctx.scale(-1, 1),
+     * and submits Base64 frame + ID image to Face++ via verify_face.php.
      */
-    async function completeLivenessVerification(reason) {
+    async function captureAndSubmitLiveVerification(reason) {
       if (isLivenessConfirmed) return;
       isLivenessConfirmed = true;
 
-      // 1. Immediately stop camera tracking loop
-      stopLivenessTracking();
+      const video = document.getElementById('livenessVideo');
+      const canvas = document.getElementById('livenessCaptureCanvas');
+      if (!video || !canvas) {
+        isLivenessConfirmed = false;
+        return;
+      }
 
-      // 2. Show finalizing UI
+      // 1. Draw current active frame to hidden canvas maintaining visual mirror effect
+      const width = (video.videoWidth && video.videoWidth > 0) ? video.videoWidth : 640;
+      const height = (video.videoHeight && video.videoHeight > 0) ? video.videoHeight : 480;
+      canvas.width = width;
+      canvas.height = height;
+
+      const ctx = canvas.getContext('2d');
+      ctx.save();
+      ctx.scale(-1, 1);
+      ctx.drawImage(video, -width, 0, width, height);
+      ctx.restore();
+
+      // Extract high quality Base64 JPEG frame
+      const liveFaceBase64 = canvas.toDataURL('image/jpeg', 0.95);
+
+      // 2. Pause video feed only after frame has been cleanly drawn to canvas
+      try {
+        video.pause();
+      } catch (e) {}
+
+      // 3. Show finalizing overlay UI
       const overlay = document.getElementById('livenessFinalizingOverlay');
       const titleEl = document.getElementById('livenessFinalizingTitle');
       const subEl = document.getElementById('livenessFinalizingSub');
       if (overlay) overlay.style.display = 'flex';
       if (titleEl) titleEl.textContent = (reason || 'Action Confirmed') + '!';
-      if (subEl) subEl.textContent = 'Verifying ID & Face biometrics with Face++...';
+      if (subEl) subEl.textContent = 'Comparing face with ID document using Face++...';
 
       const ring = document.getElementById('livenessOvalRing');
       if (ring) ring.className = 'face-oval-ring perfect-capturing';
 
-      updateLivenessStatusBadge('✨', (reason || 'Action confirmed') + '! Verifying...', 'perfect-capturing');
+      updateLivenessStatusBadge('✨', 'Verifying with Face++...', 'perfect-capturing');
 
-      // Ensure clean Phase 2 static face capture exists before submitting
-      if (!capturedFaceDataUrl) {
-        showToast('Static face photo from Phase 2 is missing. Please capture your photo first.', 'error');
-        goToVerificationStep(2);
-        isLivenessConfirmed = false;
-        return;
-      }
-
-      // 3. Prepare payload: STRICTLY routing clean static photo from Phase 2 + Phase 1 ID photo.
-      // Phase 3 video frames are NEVER sent to Face++ to avoid motion blur false rejections.
+      // 4. Prepare payload with auto-captured Base64 string + Step 1 ID photo
       const idTypeEl = document.getElementById('idTypeSelect');
       const idType = idTypeEl ? idTypeEl.value : '';
 
       const formData = new FormData();
       formData.append('action', 'complete_verification');
-      formData.append('live_face_data', capturedFaceDataUrl);
-      if (capturedFaceBlob) {
-        formData.append('live_face', capturedFaceBlob, 'phase2_static_face.jpg');
-      }
+      formData.append('live_face_data', liveFaceBase64);
       if (selectedIdFile) {
         formData.append('id_photo', selectedIdFile);
       }
@@ -2419,13 +2257,21 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
             alertBox.style.display = 'block';
             alertBox.innerHTML = '⚠️ <strong>Verification Failed:</strong> ' + errMsg;
           }
-          updateLivenessStatusBadge('❌', errMsg, 'spoof');
+          // Do not display "no face detected" or "image too blurry" errors on the camera overlay
+          const overlayErrMsg = (errMsg.toLowerCase().includes('blurry') || errMsg.toLowerCase().includes('not detected'))
+            ? 'Verification mismatch. Retrying...'
+            : errMsg;
+          updateLivenessStatusBadge('❌', overlayErrMsg, 'spoof');
 
-          isLivenessConfirmed = false;
+          setTimeout(() => {
+            isLivenessConfirmed = false;
+            resetLivenessAntiSpoofingState();
+            startLivenessTestingTab();
+          }, 2500);
         }
       } catch (err) {
         console.error('Finalize verification error:', err);
-        const errMsg = 'Face scan does not match the ID photo.';
+        const errMsg = 'Connection error during verification. Please try again.';
         showToast(errMsg, 'error');
         if (overlay) overlay.style.display = 'none';
 
@@ -2434,9 +2280,17 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
           alertBox.style.display = 'block';
           alertBox.innerHTML = '⚠️ <strong>Verification Failed:</strong> ' + errMsg;
         }
-        updateLivenessStatusBadge('❌', errMsg, 'spoof');
+        // Do not display "no face detected" or "image too blurry" errors on the camera overlay
+        const overlayCatchMsg = (errMsg.toLowerCase().includes('blurry') || errMsg.toLowerCase().includes('not detected'))
+          ? 'Verification mismatch. Retrying...'
+          : errMsg;
+        updateLivenessStatusBadge('❌', overlayCatchMsg, 'spoof');
 
-        isLivenessConfirmed = false;
+        setTimeout(() => {
+          isLivenessConfirmed = false;
+          resetLivenessAntiSpoofingState();
+          startLivenessTestingTab();
+        }, 2500);
       }
     }
 
@@ -2444,7 +2298,7 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
      * Programmatic / Testing helper for automated verification trigger
      */
     function triggerManualLivenessAction() {
-      completeLivenessVerification('Automated physical movement detection');
+      captureAndSubmitLiveVerification('Automated physical movement detection');
     }
 
     function updateLivenessStatusBadge(icon, text, mode) {
@@ -2466,103 +2320,24 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
       }
     }
 
-    function updateTenantStatusBadge(icon, text, mode) {
-      const iconEl = document.getElementById('tenantFaceStatusIcon');
-      const textEl = document.getElementById('tenantFaceStatusText');
-      const pill = document.getElementById('tenantFaceStatusPill');
-
-      if (iconEl) iconEl.textContent = icon;
-      if (textEl) textEl.textContent = text;
-      if (pill) {
-        pill.className = 'face-status-pill';
-        if (mode === 'liveness') pill.classList.add('status-liveness');
-        else if (mode === 'holding' || mode === 'perfect-capturing') pill.classList.add('status-holding');
-        else if (mode === 'spoof') pill.classList.add('status-spoof');
-      }
-    }
-
-    /**
-     * Preloads models and starts camera stream for Step 2 static face capture
-     */
-    async function startWebcam() {
-      const video = document.getElementById('webcamVideo');
-      const statusBox = document.getElementById('cameraStatusMsg');
-      const statusText = document.getElementById('cameraStatusText');
-
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        if (statusBox && statusText) {
-          statusBox.style.display = 'flex';
-          statusText.textContent = 'Webcam API is not supported by your browser.';
-        }
-        showToast('Webcam not supported in this browser', 'error');
-        return;
-      }
-
-      if (statusBox && statusText) {
-        statusBox.style.display = 'flex';
-        statusText.textContent = 'Starting camera...';
-      }
-
-      try {
-        if (webcamStream) {
-          webcamStream.getTracks().forEach(t => t.stop());
-        }
-        webcamStream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: 'user',
-            width: { ideal: 640 },
-            height: { ideal: 480 }
-          },
-          audio: false
-        });
-
-        if (video) {
-          video.srcObject = webcamStream;
-          await video.play().catch(() => {});
-          if (statusBox) statusBox.style.display = 'none';
-        }
-      } catch (err) {
-        console.error('Camera access error:', err);
-        if (statusBox && statusText) {
-          statusBox.style.display = 'flex';
-          statusText.textContent = 'Camera access blocked or not found: ' + (err.message || 'Please allow camera permission.');
-        }
-        showToast('Camera access denied or unavailable: ' + err.name, 'error');
-      }
-    }
-
-    function stopWebcam() {
-      if (webcamStream) {
-        try {
-          webcamStream.getTracks().forEach(track => track.stop());
-        } catch (e) {}
-        webcamStream = null;
-      }
-      const video = document.getElementById('webcamVideo');
-      if (video) video.srcObject = null;
-    }
-
     // Testing and simulation helpers
     window.euclideanDistance = euclideanDistance;
     window.ensureFaceApiModelsLoaded = ensureFaceApiModelsLoaded;
     window.goToVerificationStep = goToVerificationStep;
-    window.takeStaticFaceSnapshot = takeStaticFaceSnapshot;
-    window.retakeLiveFace = retakeLiveFace;
-    window.submitFaceCompare = submitFaceCompare;
-    window.submitFullVerification = submitFaceCompare; // Backwards-compatible alias
     window.startLivenessTestingTab = startLivenessTestingTab;
     window.stopLivenessTracking = stopLivenessTracking;
-    window.completeLivenessVerification = completeLivenessVerification;
+    window.completeLivenessVerification = captureAndSubmitLiveVerification;
+    window.captureAndSubmitLiveVerification = captureAndSubmitLiveVerification;
     window.triggerManualLivenessAction = triggerManualLivenessAction;
 
     window.__simulateTenantFaceMatch = function(confidence) {
       console.log('Simulating tenant face match with confidence:', confidence || 88.5);
-      goToVerificationStep(3);
+      captureAndSubmitLiveVerification('Simulated match ' + (confidence || 88.5));
     };
 
     window.__simulateTenantLivenessAction = function(action) {
-      console.log('Simulating tenant liveness action in Step 3:', action);
-      completeLivenessVerification('Simulated ' + (action || 'blink'));
+      console.log('Simulating tenant liveness action:', action);
+      captureAndSubmitLiveVerification('Simulated ' + (action || 'blink'));
     };
 
     window.__simulateLivenessAction = window.__simulateTenantLivenessAction;
@@ -3150,9 +2925,13 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
         const photoPreview = document.getElementById('ticketPhotosPreview');
 
         if (photoInput && photoPreview) {
+          const uploadLabel = document.getElementById('ticketPhotosUploadLabel');
           photoInput.addEventListener('change', function() {
             photoPreview.innerHTML = '';
             if (this.files && this.files.length > 0) {
+              if (uploadLabel) {
+                uploadLabel.textContent = this.files.length === 1 ? this.files[0].name : (this.files.length + ' Photos Attached');
+              }
               photoPreview.style.display = 'flex';
               Array.from(this.files).forEach((file, idx) => {
                 if (file.type.startsWith('image/')) {
@@ -3174,6 +2953,9 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
                 }
               });
             } else {
+              if (uploadLabel) {
+                uploadLabel.textContent = 'Attach Photos of Item';
+              }
               photoPreview.style.display = 'none';
             }
           });

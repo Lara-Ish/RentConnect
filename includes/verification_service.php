@@ -367,6 +367,12 @@ class VerificationService
             'Student Identification',
             'Student ID Card',
             'Student ID',
+            'Student',
+            'University',
+            'College',
+            'School',
+            'Campus',
+            'Institute',
         ],
     ];
 
@@ -668,7 +674,7 @@ class VerificationService
         if (empty(trim($rawOcrText))) {
             return [
                 'matched' => false,
-                'reason' => 'Verification Failed: ID type does not match the uploaded document.',
+                'reason' => 'Verification Failed: The uploaded document does not match the selected ID type.',
                 'canonical_type' => $canonical,
                 'detected_keywords' => [],
                 'required_keywords' => $requiredSignatures
@@ -702,7 +708,7 @@ class VerificationService
         if ($conflictingType !== null) {
             return [
                 'matched' => false,
-                'reason' => 'Verification Failed: ID type does not match the uploaded document.',
+                'reason' => 'Verification Failed: The uploaded document does not match the selected ID type.',
                 'canonical_type' => $canonical,
                 'conflicting_type' => $conflictingType,
                 'detected_keywords' => $conflictingDetected,
@@ -721,7 +727,7 @@ class VerificationService
         if (empty($detectedHardcoded) && empty($allDetected)) {
             return [
                 'matched' => false,
-                'reason' => 'Verification Failed: ID type does not match the uploaded document.',
+                'reason' => 'Verification Failed: The uploaded document does not match the selected ID type.',
                 'canonical_type' => $canonical,
                 'detected_keywords' => [],
                 'required_keywords' => $requiredSignatures

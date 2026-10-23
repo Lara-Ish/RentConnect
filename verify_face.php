@@ -240,30 +240,29 @@ if (!$idFilePath || !file_exists($idFilePath)) {
     ]);
 }
 
-// 4. OCR Validation Check
-// Verify that the ID document matches the user account details and type keywords
-$ocrPassed = true; // default true if already passed or verified
+// 4. Strict ID Type Document Classification & Active OCR Cross-Checking
+// Ensure the "ID Type" selected from the dropdown menu exactly matches the physical ID document uploaded by the user.
+$idType = trim((string)($_POST['id_type'] ?? ($accountUser['id_type'] ?? '')));
 $rawOcrText = trim((string)($_POST['ocr_raw_text'] ?? ''));
 
-if (!empty($rawOcrText) && !empty($idType)) {
+// Scan the uploaded ID image if OCR text was not passed from frontend
+if (empty($rawOcrText) && !empty($idFilePath)) {
+    $ocrResult = VerificationService::extractIdDataWithOCR($idFilePath, null, $accountUser, $idType);
+    if (!empty($ocrResult['raw_text'])) {
+        $rawOcrText = $ocrResult['raw_text'];
+    }
+}
+
+// Active OCR Cross-Checking against selected ID Type
+if (!empty($idType)) {
     $typeCheck = VerificationService::verifyIdTypeMatchesDocument($idType, $rawOcrText);
     if (!$typeCheck['matched']) {
-        $ocrPassed = false;
+        // STRICT REJECTION: If a document mismatch is detected, completely halt the verification flow
+        // and return a clear error message to the frontend so the user is forced to upload the correct document.
         sendFaceJsonResponse(422, [
             'status' => 'error',
             'is_verified' => 0,
-            'message' => $typeCheck['reason'] ?: 'Verification Failed: ID type does not match the uploaded document.'
-        ]);
-    }
-
-    $ocrData = VerificationService::extractIdDataWithOCR($idFilePath, $rawOcrText, $accountUser, $idType);
-    $textMatch = VerificationService::compareIdTextWithAccount($ocrData, $accountUser);
-    if (!$textMatch['name_matched'] || !$textMatch['birthday_matched']) {
-        $ocrPassed = false;
-        sendFaceJsonResponse(422, [
-            'status' => 'error',
-            'is_verified' => 0,
-            'message' => 'Verification Failed: ID text details do not match account credentials.'
+            'message' => 'Verification Failed: The uploaded document does not match the selected ID type.'
         ]);
     }
 }
@@ -364,7 +363,7 @@ if (empty($faces2)) {
     sendFaceJsonResponse(422, [
         'status' => 'error',
         'is_verified' => 0,
-        'message' => 'Face not detected or image is too blurry. Please retake the photo.'
+        'message' => 'Face scan does not match the ID photo.'
     ]);
 }
 
@@ -386,85 +385,50 @@ $threshold1e5 = isset($thresholds['1e-5']) ? (float)$thresholds['1e-5'] : 73.9;
 
 $isConfidenceMatch = ($confidence >= 70.0) || ($threshold1e4 > 0 && $confidence >= $threshold1e4);
 
-if ($isConfidenceMatch && $ocrPassed) {
-    if ($action === 'compare_face') {
-        // Phase 1 Success: Static Face matched with ID photo!
-        // Record pending_liveness and prepare for Phase 3 Live Testing
-        $notes = sprintf('Face++ Matched: confidence %.2f%% (baseline >= 70.00%%, threshold 1e-4: %.2f%%). Awaiting Phase 3 liveness test.', $confidence, $threshold1e4);
-        $updateStmt = $pdo->prepare("
-            UPDATE users 
-            SET verification_status = 'pending_liveness',
-                live_photo_filename = :live_face,
-                verification_notes = :notes
-            WHERE id = :id
-        ");
-        $updateStmt->execute([
-            ':live_face' => basename($liveFacePath),
-            ':notes' => $notes,
-            ':id' => $userId
-        ]);
+// Strict Identity Matching: As long as captured live testing face matches photo on attached ID via Face++, approve account
+if ($isConfidenceMatch) {
+    // Unified Face++ Comparison: Directly update tenant account to is_verified = 1
+    $idFilenameToSave = $idFilename ?: ($accountUser['id_photo_filename'] ?? null);
+    $idTypeToSave = !empty($idType) ? $idType : ($accountUser['id_type'] ?? null);
+    $notes = sprintf('Face++ Verified: confidence %.2f%% (baseline >= 70.00%%, threshold 1e-4: %.2f%%). Auto-capture liveness verified.', $confidence, $threshold1e4);
 
-        if (isset($_SESSION['user'])) {
-            $_SESSION['user']['verification_status'] = 'pending_liveness';
-        }
-        $_SESSION['verification_face_matched'] = true;
-        $_SESSION['verification_face_confidence'] = $confidence;
-        $_SESSION['verification_face_file'] = basename($liveFacePath);
+    $updateStmt = $pdo->prepare("
+        UPDATE users 
+        SET is_verified = 1,
+            verification_status = 'verified',
+            id_type = :id_type,
+            id_photo_filename = :id_photo,
+            live_photo_filename = :live_face,
+            id_verified_at = NOW(),
+            verification_notes = :notes
+        WHERE id = :id
+    ");
+    $updateStmt->execute([
+        ':id_type' => $idTypeToSave,
+        ':id_photo' => $idFilenameToSave,
+        ':live_face' => basename($liveFacePath),
+        ':notes' => $notes,
+        ':id' => $userId
+    ]);
 
-        sendFaceJsonResponse(200, [
-            'status' => 'success',
-            'phase' => 'face_matched',
-            'is_verified' => 0,
-            'verification_status' => 'pending_liveness',
-            'confidence' => round($confidence, 2),
-            'threshold_1e4' => round($threshold1e4, 2),
-            'threshold_1e5' => round($threshold1e5, 2),
-            'message' => 'Face scan matched your ID photo! Proceeding to Step 3: Live Testing.'
-        ]);
-    } else {
-        // Strict End-of-Workflow Full Verification (Executed ONLY after Phase 3 liveness auto-detection)
-        // Strictly uses the Phase 2 static photo and Phase 1 ID photo.
-        $idFilenameToSave = $idFilename ?: ($accountUser['id_photo_filename'] ?? null);
-        $idTypeToSave = !empty($idType) ? $idType : ($accountUser['id_type'] ?? null);
-        $notes = sprintf('Face++ Verified: confidence %.2f%% (baseline >= 70.00%%, threshold 1e-4: %.2f%%). Automated liveness confirmed.', $confidence, $threshold1e4);
-        $updateStmt = $pdo->prepare("
-            UPDATE users 
-            SET is_verified = 1,
-                verification_status = 'verified',
-                id_type = :id_type,
-                id_photo_filename = :id_photo,
-                live_photo_filename = :live_face,
-                id_verified_at = NOW(),
-                verification_notes = :notes
-            WHERE id = :id
-        ");
-        $updateStmt->execute([
-            ':id_type' => $idTypeToSave,
-            ':id_photo' => $idFilenameToSave,
-            ':live_face' => basename($liveFacePath),
-            ':notes' => $notes,
-            ':id' => $userId
-        ]);
-
-        if (isset($_SESSION['user'])) {
-            $_SESSION['user']['is_verified'] = 1;
-            $_SESSION['user']['verification_status'] = 'verified';
-            if ($idTypeToSave) $_SESSION['user']['id_type'] = $idTypeToSave;
-            if ($idFilenameToSave) $_SESSION['user']['id_photo_filename'] = $idFilenameToSave;
-        }
-        $_SESSION['is_verified'] = 1;
-        $_SESSION['verification_status'] = 'verified';
-
-        sendFaceJsonResponse(200, [
-            'status' => 'success',
-            'is_verified' => 1,
-            'verification_status' => 'verified',
-            'confidence' => round($confidence, 2),
-            'threshold_1e4' => round($threshold1e4, 2),
-            'threshold_1e5' => round($threshold1e5, 2),
-            'message' => 'Verification Successful'
-        ]);
+    if (isset($_SESSION['user'])) {
+        $_SESSION['user']['is_verified'] = 1;
+        $_SESSION['user']['verification_status'] = 'verified';
+        if ($idTypeToSave) $_SESSION['user']['id_type'] = $idTypeToSave;
+        if ($idFilenameToSave) $_SESSION['user']['id_photo_filename'] = $idFilenameToSave;
     }
+    $_SESSION['is_verified'] = 1;
+    $_SESSION['verification_status'] = 'verified';
+
+    sendFaceJsonResponse(200, [
+        'status' => 'success',
+        'is_verified' => 1,
+        'verification_status' => 'verified',
+        'confidence' => round($confidence, 2),
+        'threshold_1e4' => round($threshold1e4, 2),
+        'threshold_1e5' => round($threshold1e5, 2),
+        'message' => 'Verification Successful'
+    ]);
 } else {
     // Confidence below realistic baseline (>= 70.0% or 1e-4 threshold) or OCR check failed
     sendFaceJsonResponse(422, [

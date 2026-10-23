@@ -260,24 +260,40 @@ $pendingReviewCount = count($pendingReviewPayments);
           
           <!-- Requirement: Prominent, clickable "Landlord Dashboard" link routing to analytics view -->
           <button type="button" class="sidebar-nav-item active" id="navLandlordDashboard" data-section="sectionAnalytics" onclick="switchSection('sectionAnalytics', this)" title="Landlord Dashboard">
-            <span class="nav-icon">📊</span>
+            <span class="nav-icon">
+              <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-700">
+                <path stroke-linecap="round" stroke-linejoin="round" d="m2.25 12 8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
+              </svg>
+            </span>
             <span class="hide-on-retract">Landlord Dashboard</span>
           </button>
 
           <!-- Requirement: Sidebar category for Tenant Directory -->
           <button type="button" class="sidebar-nav-item" id="navTenantDirectory" data-section="sectionDirectory" onclick="switchSection('sectionDirectory', this)" title="Tenant Directory">
-            <span class="nav-icon">👥</span>
+            <span class="nav-icon">
+              <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-700">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 0 0 2.625.372 9.337 9.337 0 0 0 4.121-.952 4.125 4.125 0 0 0-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 0 1 8.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0 1 11.964-3.07M12 6.375a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0Zm8.25 2.25a2.625 2.625 0 1 1-5.25 0 2.625 2.625 0 0 1 5.25 0Z" />
+              </svg>
+            </span>
             <span class="hide-on-retract">Tenant Directory</span>
           </button>
 
           <button type="button" class="sidebar-nav-item" id="navMaintenanceTickets" data-section="sectionTickets" onclick="switchSection('sectionTickets', this)" title="Maintenance Tickets">
-            <span class="nav-icon">🛠️</span>
+            <span class="nav-icon">
+              <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-700">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M11.42 15.17 17.25 21A2.652 2.652 0 0 0 21 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 1 1-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.14a4.5 4.5 0 0 0 4.486-6.32l-3.276 3.277a3.004 3.004 0 0 1-2.25 2.25l-3.276-3.276a4.5 4.5 0 0 0-6.32 4.486c.048.58.072 1.193-.092 1.743" />
+              </svg>
+            </span>
             <span class="hide-on-retract">Maintenance Tickets</span>
           </button>
 
           <!-- Requirement: Manual Payment Verification & Ledger -->
           <button type="button" class="sidebar-nav-item" id="navPaymentVerification" data-section="sectionPayments" onclick="switchSection('sectionPayments', this)" title="Payment Verification &amp; Ledger">
-            <span class="nav-icon">💵</span>
+            <span class="nav-icon">
+              <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-700">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 8.25h19.5M2.25 9h19.5m-16.5 5.25h6m-6 2.25h3m-3.75 3h15a2.25 2.25 0 0 0 2.25-2.25V6.75A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25v10.5A2.25 2.25 0 0 0 4.5 19.5Z" />
+              </svg>
+            </span>
             <span class="hide-on-retract">Payment Verification</span>
             <?php if ($pendingReviewCount > 0): ?>
               <span class="clay-badge badge-pending hide-on-retract" style="margin-left: auto; font-size: 10px; padding: 2px 7px;">
@@ -291,16 +307,26 @@ $pendingReviewCount = count($pendingReviewPayments);
       <!-- Sidebar Footer -->
       <div class="sidebar-footer">
         <div class="sidebar-settings-container">
-          <button type="button" class="clay-btn clay-btn-secondary clay-btn-full" id="settingsToggleBtn" onclick="toggleSettingsMenu()" style="padding: 10px 16px; font-size: 13px;" title="Settings">
-            <span>⚙️</span> <span class="hide-on-retract">Settings</span>
+          <button type="button" class="clay-btn clay-btn-secondary clay-btn-full" id="settingsToggleBtn" onclick="toggleSettingsMenu()" style="padding: 10px 16px; font-size: 13px; display: flex; align-items: center; justify-content: center; gap: 8px;" title="Settings">
+            <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-700">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M10.343 3.94c.09-.542.56-.94 1.11-.94h1.093c.55 0 1.02.398 1.11.94l.149.894c.07.424.384.764.78.93.398.164.855.142 1.205-.108l.737-.527a1.125 1.125 0 0 1 1.45.12l.773.774c.39.389.44 1.002.12 1.45l-.527.737c-.25.35-.272.806-.107 1.204.165.397.505.71.93.78l.893.15c.543.09.94.559.94 1.109v1.094c0 .55-.397 1.02-.94 1.11l-.894.149c-.424.07-.764.383-.929.78-.165.398-.143.854.107 1.204l.527.738c.32.447.27.1.06-.12 1.45l-.774.773a1.125 1.125 0 0 1-1.449.12l-.738-.527c-.35-.25-.806-.272-1.203-.107-.398.165-.71.505-.781.929l-.149.894c-.09.542-.56.94-1.11.94h-1.094c-.55 0-1.019-.398-1.11-.94l-.148-.894c-.071-.424-.384-.764-.781-.93-.398-.164-.854-.142-1.204.108l-.738.527c-.447.32-1.06.27-1.45-.12l-.773-.774a1.125 1.125 0 0 1-.12-1.45l.527-.737c.25-.35.272-.806.108-1.204-.165-.397-.506-.71-.93-.78l-.894-.15c-.542-.09-.94-.56-.94-1.109v-1.094c0-.55.398-1.02.94-1.11l.894-.149c.424-.07.765-.383.93-.78.165-.398.143-.854-.108-1.204l-.526-.738a1.125 1.125 0 0 1 .12-1.45l.773-.773a1.125 1.125 0 0 1 1.45-.12l.737.527c.35.25.807.272 1.204.107.397-.165.71-.505.78-.929l.15-.894Z" />
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+            </svg>
+            <span class="hide-on-retract">Settings</span>
           </button>
           <!-- Settings Dropup Menu: Strictly displays only "Profile" -->
           <div class="clay-settings-dropdown" id="settingsDropdown">
-            <button type="button" class="settings-dropdown-item" id="settingsItemProfile" onclick="openProfileView()">
-              <span>👤</span> <span>Profile</span>
+            <button type="button" class="settings-dropdown-item" id="settingsItemProfile" onclick="openProfileView()" style="display: flex; align-items: center; gap: 8px;">
+              <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-700" style="width: 18px; height: 18px;">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z" />
+              </svg>
+              <span>Profile</span>
             </button>
-            <a href="logout.php" class="settings-dropdown-item settings-item-danger">
-              <span>🚪</span> <span>Sign Out</span>
+            <a href="logout.php" class="settings-dropdown-item settings-item-danger" style="display: flex; align-items: center; gap: 8px;">
+              <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-700" style="width: 18px; height: 18px; color: inherit;">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9" />
+              </svg>
+              <span>Sign Out</span>
             </a>
           </div>
         </div>
@@ -315,7 +341,6 @@ $pendingReviewCount = count($pendingReviewPayments);
       <!-- =================================================================
            TOP NAVIGATION BAR:
            Right-aligned elements only: Refresh button and Landlord profile block
-           (Left brand pill, title, house icon, and subtitle completely deleted)
            ================================================================= -->
       <header class="top-nav-bar">
         <!-- Upper Right: Refresh Button, Landlord Name & Role Title Directly Below -->
@@ -331,8 +356,10 @@ $pendingReviewCount = count($pendingReviewPayments);
             <span class="landlord-header-role">Landlord</span>
           </div>
 
-          <div class="header-avatar-badge" title="Landlord Account">
-            🏠
+          <div class="header-avatar-badge" title="Landlord Account" style="display: flex; align-items: center; justify-content: center;">
+            <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-700">
+              <path stroke-linecap="round" stroke-linejoin="round" d="m2.25 12 8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
+            </svg>
           </div>
         </div>
       </header>
@@ -496,7 +523,12 @@ $pendingReviewCount = count($pendingReviewPayments);
             <?php foreach ($unitsWithTenants as $u): ?>
             <div class="clay-folder-card" onclick="openUnitFolder(<?= $u['id'] ?>)">
               <div class="clay-folder-tab"></div>
-              <div class="folder-title"><?= htmlspecialchars($u['unit_number']) ?></div>
+              <div class="folder-title" style="display: flex; align-items: center; gap: 8px;">
+                <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-700">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 21h19.5m-18-18v18m10.5-18v18m6-13.5V21M6.75 6.75h.75m-.75 3h.75m-.75 3h.75m3-6h.75m-.75 3h.75m-.75 3h.75M6.75 21v-3.375c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21M3 3h12m-.75 4.5H21m-3.75 3.75h.008v.008h-.008v-.008Zm0 3h.008v.008h-.008v-.008Zm0 3h.008v.008h-.008v-.008Z" />
+                </svg>
+                <span><?= htmlspecialchars($u['unit_number']) ?></span>
+              </div>
               <div class="folder-subtitle">Floor <?= $u['floor_level'] ?> • <?= $u['bedrooms'] ?> Bed / <?= $u['bathrooms'] ?> Bath</div>
               
               <div class="folder-meta-row">
@@ -524,8 +556,11 @@ $pendingReviewCount = count($pendingReviewPayments);
                   ← Back to Folders
                 </button>
                 <div>
-                  <h1 style="font-size: 24px; font-weight: 800; color: #0f172a; margin: 0;">
-                    <?= htmlspecialchars($u['unit_number']) ?>
+                  <h1 style="font-size: 24px; font-weight: 800; color: #0f172a; margin: 0; display: flex; align-items: center; gap: 8px;">
+                    <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-700">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 21h19.5m-18-18v18m10.5-18v18m6-13.5V21M6.75 6.75h.75m-.75 3h.75m-.75 3h.75m3-6h.75m-.75 3h.75m-.75 3h.75M6.75 21v-3.375c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21M3 3h12m-.75 4.5H21m-3.75 3.75h.008v.008h-.008v-.008Zm0 3h.008v.008h-.008v-.008Zm0 3h.008v.008h-.008v-.008Z" />
+                    </svg>
+                    <span><?= htmlspecialchars($u['unit_number']) ?></span>
                   </h1>
                   <p style="font-size: 13px; color: var(--text-muted); margin-top: 2px;">
                     Monthly Rent: <strong>₱<?= number_format((float)$u['monthly_rent'], 2) ?>/mo</strong> • Floor <?= $u['floor_level'] ?> • <?= $u['bedrooms'] ?> Bed / <?= $u['bathrooms'] ?> Bath
@@ -1055,7 +1090,10 @@ $pendingReviewCount = count($pendingReviewPayments);
         <div style="background: var(--clay-input-bg); border-radius: var(--radius-md); padding: 14px; box-shadow: var(--clay-sunken-shadow); margin-bottom: 16px;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
             <div style="font-size: 13px; font-weight: 800; color: #0f172a; display: flex; align-items: center; gap: 6px;">
-              <span>👨‍👩‍👧‍👦</span> Occupant Breakdown
+              <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-700" style="width: 18px; height: 18px;">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 0 0 2.625.372 9.337 9.337 0 0 0 4.121-.952 4.125 4.125 0 0 0-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 0 1 8.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0 1 11.964-3.07M12 6.375a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0Zm8.25 2.25a2.625 2.625 0 1 1-5.25 0 2.625 2.625 0 0 1 5.25 0Z" />
+              </svg>
+              <span>Occupant Breakdown</span>
             </div>
             <span class="clay-badge badge-paid" style="font-size: 10.5px; padding: 2px 8px;">1 Family per Account</span>
           </div>
@@ -1070,7 +1108,12 @@ $pendingReviewCount = count($pendingReviewPayments);
               <input type="number" id="newKidsCount" name="kids_count" class="clay-input" min="0" value="0" required>
             </div>
             <div class="form-group" style="margin-bottom: 0;">
-              <label class="form-label" for="newTotalOccupants" style="font-size: 11.5px;">Total Occupants <span class="req">*</span></label>
+              <label class="form-label" for="newTotalOccupants" style="font-size: 11.5px; display: flex; align-items: center; gap: 4px;">
+                <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-700" style="width: 14px; height: 14px;">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 0 0 2.625.372 9.337 9.337 0 0 0 4.121-.952 4.125 4.125 0 0 0-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 0 1 8.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0 1 11.964-3.07M12 6.375a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0Zm8.25 2.25a2.625 2.625 0 1 1-5.25 0 2.625 2.625 0 0 1 5.25 0Z" />
+                </svg>
+                <span>Total Occupants <span class="req">*</span></span>
+              </label>
               <input type="number" id="newTotalOccupants" name="total_occupants" class="clay-input" min="1" value="1" readonly style="background: rgba(226, 232, 240, 0.7); cursor: not-allowed; font-weight: 800; color: #1e293b;">
             </div>
           </div>
@@ -1196,7 +1239,12 @@ $pendingReviewCount = count($pendingReviewPayments);
         <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; text-align: center;">
           <div style="background: #ffffff; padding: 8px 10px; border-radius: var(--radius-sm); border: 1px solid var(--clay-border);">
             <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Total Occupants</div>
-            <div id="tdTotalOccupants" style="font-size: 18px; font-weight: 800; color: #0f172a; margin-top: 2px;">1</div>
+            <div style="display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 2px;">
+              <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-700">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 0 0 2.625.372 9.337 9.337 0 0 0 4.121-.952 4.125 4.125 0 0 0-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 0 1 8.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0 1 11.964-3.07M12 6.375a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0Zm8.25 2.25a2.625 2.625 0 1 1-5.25 0 2.625 2.625 0 0 1 5.25 0Z" />
+              </svg>
+              <span id="tdTotalOccupants" style="font-size: 18px; font-weight: 800; color: #0f172a;">1</span>
+            </div>
           </div>
           <div style="background: #ffffff; padding: 8px 10px; border-radius: var(--radius-sm); border: 1px solid var(--clay-border);">
             <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Adults</div>
