@@ -9,6 +9,7 @@ declare(strict_types=1);
 header('Content-Type: application/json; charset=UTF-8');
 
 require_once __DIR__ . '/../config/auth.php';
+require_once __DIR__ . '/../includes/notification_service.php';
 
 $requestMethod = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
@@ -59,7 +60,7 @@ try {
             }
 
             // Check if payment exists
-            $check = $pdo->prepare("SELECT id, billing_cycle, amount_due, amount_paid, receipt_filename FROM payments WHERE id = :id LIMIT 1");
+            $check = $pdo->prepare("SELECT id, tenant_id, billing_cycle, amount_due, amount_paid, receipt_filename FROM payments WHERE id = :id LIMIT 1");
             $check->execute([':id' => $paymentId]);
             $payment = $check->fetch();
 
@@ -89,6 +90,25 @@ try {
                 ':notes' => $finalNotes,
                 ':id' => $paymentId
             ]);
+
+            // Notify Tenant of review outcome
+            if (!empty($payment['tenant_id'])) {
+                $monthStr = date('F Y', strtotime($payment['billing_cycle']));
+                $notifTitle = $isApproved ? 'Payment Proof Verified' : 'Payment Proof Rejected';
+                $notifMsg = $isApproved
+                    ? "Your payment proof for {$monthStr} has been successfully verified and approved."
+                    : "Your payment proof for {$monthStr} was rejected. Note: {$finalNotes}. Please review and re-submit.";
+                NotificationService::notifyTenant(
+                    $pdo,
+                    (int)$payment['tenant_id'],
+                    'payment',
+                    $notifTitle,
+                    $notifMsg,
+                    'tenantProfile',
+                    $paymentId,
+                    $isApproved ? 'payment_approved' : 'payment_rejected'
+                );
+            }
 
             echo json_encode([
                 'status' => 'success',
@@ -202,6 +222,19 @@ try {
                 ]);
                 $paymentId = (int)$pdo->lastInsertId();
             }
+
+            // Notify Landlords of submitted payment proof
+            $tenantName = $tenantUser['name'] ?? 'Tenant';
+            $cycleMonth = date('F Y', strtotime($billingCycle));
+            NotificationService::notifyLandlords(
+                $pdo,
+                'payment',
+                'Payment Proof Submitted',
+                "{$tenantName} submitted payment proof for {$cycleMonth}. Payment verification is required.",
+                'sectionPayments',
+                $paymentId,
+                'payment_pending'
+            );
 
             echo json_encode([
                 'status' => 'success',

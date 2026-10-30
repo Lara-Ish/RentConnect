@@ -66,11 +66,13 @@ CREATE TABLE `users` (
     `adults_count` INT NOT NULL DEFAULT 1,
     `kids_count` INT NOT NULL DEFAULT 0,
     `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+    `active_tenant_unit_id` INT UNSIGNED GENERATED ALWAYS AS (IF(role = 'tenant' AND is_active = 1, unit_id, NULL)) STORED,
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     CONSTRAINT `fk_users_unit` 
         FOREIGN KEY (`unit_id`) REFERENCES `units` (`id`) 
         ON DELETE SET NULL ON UPDATE CASCADE,
+    UNIQUE KEY `uq_active_tenant_unit` (`active_tenant_unit_id`),
     INDEX `idx_users_role` (`role`),
     INDEX `idx_users_username` (`username`),
     INDEX `idx_users_unit` (`unit_id`)
@@ -182,6 +184,37 @@ INSERT INTO `payments` (`tenant_id`, `unit_id`, `billing_cycle`, `due_date`, `am
 -- October 2026 (Unit 101 PENDING review for landlord manual verification; Unit 102 overdue)
 (2, 1, '2026-10-01', '2026-10-05', 15000.00, 15000.00, '2026-10-03', 'pending', 'receipt_oct_u101.pdf', 0, NULL, NULL),
 (3, 2, '2026-10-01', '2026-10-05', 18000.00, 0.00, NULL, 'overdue', NULL, 0, 'No payment submitted for October cycle', NULL);
+
+-- ----------------------------------------------------------------------------
+-- TRIGGERS: ENFORCE STRICT 1 ACTIVE TENANT PER APARTMENT UNIT RESTRICTION
+-- ----------------------------------------------------------------------------
+DELIMITER //
+
+CREATE TRIGGER `trg_users_one_active_tenant_insert`
+BEFORE INSERT ON `users`
+FOR EACH ROW
+BEGIN
+    IF NEW.role = 'tenant' AND NEW.is_active = 1 AND NEW.unit_id IS NOT NULL THEN
+        IF (SELECT COUNT(*) FROM `users` WHERE `unit_id` = NEW.unit_id AND `role` = 'tenant' AND `is_active` = 1) > 0 THEN
+            SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'This unit is already occupied and has an existing tenant account. Only one tenant account is allowed per unit.';
+        END IF;
+    END IF;
+END//
+
+CREATE TRIGGER `trg_users_one_active_tenant_update`
+BEFORE UPDATE ON `users`
+FOR EACH ROW
+BEGIN
+    IF NEW.role = 'tenant' AND NEW.is_active = 1 AND NEW.unit_id IS NOT NULL THEN
+        IF (SELECT COUNT(*) FROM `users` WHERE `unit_id` = NEW.unit_id AND `role` = 'tenant' AND `is_active` = 1 AND `id` != OLD.id) > 0 THEN
+            SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'This unit is already occupied and has an existing tenant account. Only one tenant account is allowed per unit.';
+        END IF;
+    END IF;
+END//
+
+DELIMITER ;
 
 -- 4. Maintenance Tickets Across the Units (Incurred costs in ₱)
 INSERT INTO `maintenance_tickets` (`tenant_id`, `unit_id`, `title`, `description`, `category`, `priority`, `status`, `actual_cost`, `created_at`, `resolved_at`) VALUES

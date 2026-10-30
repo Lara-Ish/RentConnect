@@ -247,18 +247,19 @@ $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 curl_close($ch);
 
 // Also verify directly against database query logic
+$vacantUnitId = (int)($pdo->query("SELECT id FROM units WHERE id NOT IN (SELECT unit_id FROM users WHERE role = 'tenant' AND is_active = 1 AND unit_id IS NOT NULL) LIMIT 1")->fetchColumn() ?: 2);
 $insStmt = $pdo->prepare("
     INSERT INTO users (
         unit_id, username, name, email, password_hash, role, verification_status, phone, 
         birthday, emergency_contact_name, emergency_contact_relationship, emergency_contact_phone, 
         move_in_date, total_occupants, adults_count, kids_count, is_active, created_at
     ) VALUES (
-        1, 'RC999', 'Direct Test Family', :email, 'hash', 'tenant', 'unverified', '+63 900 000 0000',
+        :unit_id, 'RC999', 'Direct Test Family', :email, 'hash', 'tenant', 'unverified', '+63 900 000 0000',
         '1992-01-01', 'Direct Emergency', 'Parent', '+63 911 222 3333',
         CURDATE(), 5, 2, 3, 1, NOW()
     )
 ");
-$insStmt->execute([':email' => $testEmail . '.direct']);
+$insStmt->execute([':unit_id' => $vacantUnitId, ':email' => $testEmail . '.direct']);
 $insertedId = (int)$pdo->lastInsertId();
 
 $verifyStmt = $pdo->prepare("SELECT total_occupants, adults_count, kids_count FROM users WHERE id = :id");

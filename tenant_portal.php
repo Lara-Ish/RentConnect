@@ -21,6 +21,25 @@ if ($freshUser) {
     $user = $freshUser;
 }
 
+// Resolve user avatar image URL dynamically from database record or uploaded face
+$userAvatarUrl = '';
+if (!empty($user['live_photo_filename'])) {
+    if (file_exists(__DIR__ . '/uploads/id_verifications/' . $user['live_photo_filename'])) {
+        $userAvatarUrl = 'uploads/id_verifications/' . htmlspecialchars($user['live_photo_filename']);
+    } elseif (file_exists(__DIR__ . '/uploads/live_captures/' . $user['live_photo_filename'])) {
+        $userAvatarUrl = 'uploads/live_captures/' . htmlspecialchars($user['live_photo_filename']);
+    } elseif (file_exists(__DIR__ . '/uploads/' . $user['live_photo_filename'])) {
+        $userAvatarUrl = 'uploads/' . htmlspecialchars($user['live_photo_filename']);
+    }
+}
+
+// Extract first letter of user's first name dynamically for profile icon
+$userFirstName = trim(explode(' ', trim($user['name'] ?? 'U'))[0]);
+$userInitial = strtoupper(mb_substr($userFirstName, 0, 1));
+if ($userInitial === '') {
+    $userInitial = 'U';
+}
+
 // Fetch assigned unit details
 $unitStmt = $pdo->prepare("SELECT * FROM units WHERE id = :uid LIMIT 1");
 $unitStmt->execute([':uid' => $user['unit_id'] ?? 1]);
@@ -306,7 +325,8 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
     #appSidebar,
     .sidebar-top-header,
     .sidebar-footer,
-    .sidebar-settings-container {
+    .sidebar-settings-container,
+    .header-settings-container {
       overflow: visible !important;
     }
 
@@ -328,7 +348,9 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
 
     #settingsToggleBtn,
     .sidebar-settings-container > button,
-    .sidebar-settings-container .clay-btn {
+    .sidebar-settings-container .clay-btn,
+    .header-settings-container > button,
+    .header-settings-container .clay-btn {
       position: relative !important;
       z-index: 999 !important;
       pointer-events: auto !important;
@@ -465,32 +487,8 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
 
       <!-- Sidebar Footer -->
       <div class="sidebar-footer">
-        <div class="hide-on-retract" style="font-size: 11.5px; color: var(--text-muted); text-align: center; margin-bottom: 12px;">
+        <div class="hide-on-retract" style="font-size: 11.5px; color: var(--text-muted); text-align: center;">
           <?= htmlspecialchars($unit['unit_number']) ?> • ₱<?= number_format((float)$unit['monthly_rent'], 2) ?>/mo
-        </div>
-        <div class="sidebar-settings-container">
-          <button type="button" class="clay-btn clay-btn-secondary clay-btn-full" id="settingsToggleBtn" onclick="toggleSettingsMenu(event)" style="padding: 10px 16px; font-size: 13px; display: flex; align-items: center; justify-content: center; gap: 8px;" title="Settings">
-            <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-700">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M10.343 3.94c.09-.542.56-.94 1.11-.94h1.093c.55 0 1.02.398 1.11.94l.149.894c.07.424.384.764.78.93.398.164.855.142 1.205-.108l.737-.527a1.125 1.125 0 0 1 1.45.12l.773.774c.39.389.44 1.002.12 1.45l-.527.737c-.25.35-.272.806-.107 1.204.165.397.505.71.93.78l.893.15c.543.09.94.559.94 1.109v1.094c0 .55-.397 1.02-.94 1.11l-.894.149c-.424.07-.764.383-.929.78-.165.398-.143.854.107 1.204l.527.738c.32.447.27.1.06-.12 1.45l-.774.773a1.125 1.125 0 0 1-1.449.12l-.738-.527c-.35-.25-.806-.272-1.203-.107-.398.165-.71.505-.781.929l-.149.894c-.09.542-.56.94-1.11.94h-1.094c-.55 0-1.019-.398-1.11-.94l-.148-.894c-.071-.424-.384-.764-.781-.93-.398-.164-.854-.142-1.204.108l-.738.527c-.447.32-1.06.27-1.45-.12l-.773-.774a1.125 1.125 0 0 1-.12-1.45l.527-.737c.25-.35.272-.806.108-1.204-.165-.397-.506-.71-.93-.78l-.894-.15c-.542-.09-.94-.56-.94-1.109v-1.094c0-.55.398-1.02.94-1.11l.894-.149c.424-.07.765-.383.93-.78.165-.398.143-.854-.108-1.204l-.526-.738a1.125 1.125 0 0 1 .12-1.45l.773-.773a1.125 1.125 0 0 1 1.45-.12l.737.527c.35.25.807.272 1.204.107.397-.165.71-.505.78-.929l.15-.894Z" />
-              <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
-            </svg>
-            <span class="hide-on-retract">Settings</span>
-          </button>
-          <!-- Settings Dropup Menu -->
-          <div class="clay-settings-dropdown" id="settingsDropdown">
-            <button type="button" class="settings-dropdown-item" onclick="openProfileView()" style="display: flex; align-items: center; gap: 8px;">
-              <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-700" style="width: 18px; height: 18px;">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z" />
-              </svg>
-              <span>Profile</span>
-            </button>
-            <a href="logout.php" class="settings-dropdown-item settings-item-danger" style="display: flex; align-items: center; gap: 8px;">
-              <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-700" style="width: 18px; height: 18px; color: inherit;">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9" />
-              </svg>
-              <span>Sign Out</span>
-            </a>
-          </div>
         </div>
       </div>
     </aside>
@@ -503,20 +501,100 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
       <!-- =================================================================
            TOP NAVIGATION BAR:
            1. Sidebar Toggle Button is strictly inside sidebar (removed from here)
-           2. Upper Right Corner: Tenant profile and unit identifier
+           2. Upper Right Corner: Tenant profile, unit identifier, and Settings button
            ================================================================= -->
       <header class="top-nav-bar">
-        <!-- Upper Right: Tenant Profile & Unit Badge -->
+        <!-- Upper Right: Profile Trigger with Dropdown Menu -->
         <div class="top-nav-right">
-          <div class="landlord-header-profile">
-            <div class="landlord-header-name"><?= htmlspecialchars($user['name']) ?></div>
-            <span class="landlord-header-role">Resident • <?= htmlspecialchars($unit['unit_number']) ?></span>
+          <!-- Notification Bell Trigger and Dropdown Panel -->
+          <div class="header-notification-container" style="position: relative;">
+            <button type="button" class="header-notification-btn" id="headerNotificationBtn" onclick="toggleNotificationPanel(event)" title="Notifications" aria-label="Notifications">
+              <svg fill="none" viewBox="0 0 24 24" stroke-width="1.6" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0" />
+              </svg>
+              <span class="notification-badge" id="notificationBadge" style="display: none;">0</span>
+            </button>
+
+            <!-- Notification Dropdown Panel: Glassmorphism Design -->
+            <div class="clay-settings-dropdown notification-dropdown-panel" id="notificationDropdown">
+              <div class="notification-panel-header">
+                <div class="notification-title-group" style="display: flex; align-items: center; gap: 8px;">
+                  <h3 class="notification-heading">Notifications</h3>
+                  <span class="notification-counter-pill" id="notificationUnreadPill" style="display: none;">0 new</span>
+                </div>
+                <button type="button" class="notification-mark-all-btn" id="btnMarkAllRead" onclick="markAllNotificationsAsRead(event)">
+                  Mark all as read
+                </button>
+              </div>
+
+              <!-- Notification items container -->
+              <div class="notification-items-scroll" id="notificationListContainer">
+                <div class="notification-loading-state" id="notificationLoading" style="padding: 24px; text-align: center; color: #64748b; font-size: 13px;">
+                  <span>Loading notifications...</span>
+                </div>
+              </div>
+            </div>
           </div>
 
-          <div class="header-avatar-badge tenant-avatar" title="Resident Account" style="display: flex; align-items: center; justify-content: center;">
-            <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-700">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 0 1 3 3m3 0a6 6 0 0 1-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1 1 21.75 8.25Z" />
-            </svg>
+          <!-- Circular Profile Icon Trigger with Dropdown Menu -->
+          <div class="sidebar-settings-container header-settings-container" style="position: relative;">
+            <div class="header-avatar-badge" id="headerAvatarBadge" onclick="toggleSettingsMenu(event)" role="button" tabindex="0" title="Account &amp; Settings" style="cursor: pointer;">
+              <span class="header-avatar-initial"><?= htmlspecialchars($userInitial) ?></span>
+            </div>
+
+            <!-- Profile Dropdown: Clean Glassmorphism Panel -->
+            <div class="clay-settings-dropdown fb-profile-dropdown" id="settingsDropdown">
+              <!-- Top Profile Information Card (Display-Only) -->
+              <div class="fb-profile-card">
+                <!-- Main Profile Display: Avatar/Initial & Full Name (Non-clickable) -->
+                <div class="fb-profile-main-row fb-profile-display-only">
+                  <div class="fb-profile-avatar-circle">
+                    <?php if (!empty($userAvatarUrl)): ?>
+                      <img src="<?= $userAvatarUrl ?>" alt="<?= htmlspecialchars($user['name'] ?? 'Tenant') ?>">
+                    <?php else: ?>
+                      <span><?= htmlspecialchars($userInitial) ?></span>
+                    <?php endif; ?>
+                  </div>
+                  <div class="fb-profile-main-info">
+                    <span class="fb-profile-name" id="profileDropdownName"><?= htmlspecialchars($user['name'] ?? 'Tenant') ?></span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Options Directly Below Profile Information: Visually Separated -->
+              <div class="fb-actions-group">
+                <!-- Settings & Privacy Option (Positioned Directly Below Profile Information) -->
+                <button type="button" class="fb-dropdown-action-item" id="settingsToggleBtn" onclick="openProfileView('accountInfo')" title="Settings &amp; privacy">
+                  <div class="fb-action-icon-circle">
+                    <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5 text-gray-700">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 0 1 0 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 0 1 0-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281Z" />
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+                    </svg>
+                  </div>
+                  <span class="fb-action-label">Settings &amp; privacy</span>
+                  <span class="fb-action-arrow">
+                    <svg fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+                    </svg>
+                  </span>
+                </button>
+
+                <!-- Sign Out Option -->
+                <a href="logout.php" class="fb-dropdown-action-item fb-action-item-danger" title="Sign Out">
+                  <div class="fb-action-icon-circle">
+                    <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9" />
+                    </svg>
+                  </div>
+                  <span class="fb-action-label">Sign Out</span>
+                  <span class="fb-action-arrow">
+                    <svg fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+                    </svg>
+                  </span>
+                </a>
+              </div>
+            </div>
           </div>
         </div>
       </header>
@@ -971,7 +1049,7 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
                 <div class="detail-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 18px; margin-bottom: 24px;">
                   <div class="detail-item">
                     <span class="detail-label">Full Name:</span>
-                    <span class="detail-value" style="font-size: 15px; font-weight: 700;"><?= htmlspecialchars($user['name']) ?></span>
+                    <span class="detail-value" id="profileFullName" style="font-size: 15px; font-weight: 700;"><?= htmlspecialchars($user['name']) ?></span>
                   </div>
                   <div class="detail-item">
                     <span class="detail-label">Username:</span>
@@ -1437,13 +1515,35 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
         history.replaceState(null, '', `tenant_portal.php?section=${sectionId}`);
       }
 
+      // Hide Settings button when leaving profile section
+      updateProfileSettingsVisibility(false);
+
       closeSettingsMenu();
+    }
+
+    // Synchronize user profile information and settings state
+    function updateProfileSettingsVisibility(isProfileOpen) {
+      const nameEl = document.getElementById('headerUserName');
+      if (nameEl) {
+        nameEl.textContent = <?= json_encode($user['name'] ?? 'Resident') ?>;
+      }
+      const profNameEl = document.getElementById('profileFullName');
+      if (profNameEl) {
+        profNameEl.textContent = <?= json_encode($user['name'] ?? 'Resident') ?>;
+      }
+      const dropNameEl = document.getElementById('profileDropdownName');
+      if (dropNameEl) {
+        dropNameEl.textContent = <?= json_encode($user['name'] ?? 'Resident') ?>;
+      }
     }
 
     // Settings Dropdown Popover Control
     function toggleSettingsMenu(e) {
       if (e && typeof e.stopPropagation === 'function') {
         e.stopPropagation();
+      }
+      if (typeof closeNotificationPanel === 'function') {
+        closeNotificationPanel();
       }
       const d = document.getElementById('settingsDropdown');
       if (d) d.classList.toggle('show');
@@ -1461,6 +1561,9 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
 
       const profSec = document.getElementById('tenantProfile');
       if (profSec) profSec.classList.add('active-section');
+
+      // Show Settings button along with user profile information
+      updateProfileSettingsVisibility(true);
 
       switchProfileSubTab(tab, null, updateUrl);
       closeSettingsMenu();
@@ -1524,10 +1627,29 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
           });
         }
 
-        // 2. Settings Button
+        // 2. Settings & Privacy Button inside Dropdown
         const settingsToggleBtn = document.getElementById('settingsToggleBtn');
         if (settingsToggleBtn) {
           settingsToggleBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            openProfileView('accountInfo');
+          });
+        }
+
+        // Header Profile and Avatar Badges as Menu Triggers
+        const headerProfileTrigger = document.getElementById('headerProfileTrigger');
+        if (headerProfileTrigger) {
+          headerProfileTrigger.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            toggleSettingsMenu(e);
+          });
+        }
+
+        const headerAvatarBadge = document.getElementById('headerAvatarBadge');
+        if (headerAvatarBadge) {
+          headerAvatarBadge.addEventListener('click', (e) => {
             e.preventDefault();
             e.stopPropagation();
             toggleSettingsMenu(e);
@@ -1569,7 +1691,12 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
 
         // 6. Global outside click handler to dismiss settings dropdown
         document.addEventListener('click', (e) => {
-          if (!e.target.closest('#settingsToggleBtn') && !e.target.closest('#settingsDropdown')) {
+          if (!e.target.closest('#settingsToggleBtn') && 
+              !e.target.closest('#settingsDropdown') && 
+              !e.target.closest('#headerProfileTrigger') && 
+              !e.target.closest('#headerAvatarBadge') &&
+              !e.target.closest('#headerNotificationBtn') &&
+              !e.target.closest('#notificationDropdown')) {
             closeSettingsMenu();
           }
         });
@@ -3122,6 +3249,9 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
       const targetSec = urlParams.get('section');
       const targetTab = urlParams.get('tab') || 'accountInfo';
 
+      // Initialize Settings button visibility based on whether Profile section is active
+      updateProfileSettingsVisibility(targetSec === 'tenantProfile');
+
       if (targetSec === 'tenantProfile') {
         openProfileView(targetTab, false);
       } else if (targetSec) {
@@ -3136,5 +3266,7 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
       initTenantEventListeners();
     }
   </script>
+  <!-- Real-time Centralized Notification Client Handler -->
+  <script src="assets/js/notifications.js"></script>
 </body>
 </html>

@@ -11,6 +11,7 @@ declare(strict_types=1);
 header('Content-Type: application/json; charset=UTF-8');
 
 require_once __DIR__ . '/../config/auth.php';
+require_once __DIR__ . '/../includes/notification_service.php';
 
 $requestMethod = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
@@ -92,9 +93,12 @@ try {
             }
         }
 
+        $occupiedUnitIds = array_keys(array_filter($grouped, fn($u) => !empty($u['tenants'])));
+
         echo json_encode([
             'status' => 'success',
             'total_tenants' => count($allTenants),
+            'occupied_unit_ids' => $occupiedUnitIds,
             'units' => array_values($grouped)
         ]);
         exit;
@@ -167,6 +171,104 @@ try {
             exit;
         }
 
+        // TRANSFER OR EDIT TENANT UNIT ACTION
+        if ($action === 'transfer' || $action === 'update_unit') {
+            $tenantId = (int)($input['tenant_id'] ?? 0);
+            $targetUnitId = (int)($input['unit_id'] ?? 0);
+
+            if ($tenantId <= 0 || $targetUnitId <= 0) {
+                http_response_code(422);
+                echo json_encode(['status' => 'error', 'message' => 'Tenant ID and target Unit ID are required.']);
+                exit;
+            }
+
+            $pdo->beginTransaction();
+
+            // Verify target unit exists
+            $uStmt = $pdo->prepare("SELECT id, unit_number, monthly_rent FROM units WHERE id = :id LIMIT 1");
+            $uStmt->execute([':id' => $targetUnitId]);
+            $targetUnit = $uStmt->fetch();
+            if (!$targetUnit) {
+                $pdo->rollBack();
+                http_response_code(422);
+                echo json_encode(['status' => 'error', 'message' => 'Selected target unit does not exist.']);
+                exit;
+            }
+
+            // Verify tenant exists
+            $tStmt = $pdo->prepare("SELECT id, name, unit_id, role, is_active FROM users WHERE id = :id AND role = 'tenant' LIMIT 1");
+            $tStmt->execute([':id' => $tenantId]);
+            $targetTenant = $tStmt->fetch();
+            if (!$targetTenant) {
+                $pdo->rollBack();
+                http_response_code(404);
+                echo json_encode(['status' => 'error', 'message' => 'Tenant not found.']);
+                exit;
+            }
+
+            // Concurrency-safe check: Is target unit occupied by another active tenant?
+            $chkTarget = $pdo->prepare("
+                SELECT id, name FROM users 
+                WHERE unit_id = :uid AND role = 'tenant' AND is_active = 1 AND id != :tid 
+                LIMIT 1 
+                FOR UPDATE
+            ");
+            $chkTarget->execute([':uid' => $targetUnitId, ':tid' => $tenantId]);
+            if ($chkTarget->fetch()) {
+                $pdo->rollBack();
+                http_response_code(409);
+                echo json_encode([
+                    'status' => 'error',
+                    'message' => 'This unit is already occupied and has an existing tenant account. Only one tenant account is allowed per unit.'
+                ]);
+                exit;
+            }
+
+            // Perform transfer
+            try {
+                $upd = $pdo->prepare("UPDATE users SET unit_id = :uid WHERE id = :id");
+                $upd->execute([':uid' => $targetUnitId, ':id' => $tenantId]);
+
+                // Update pending payments to new unit if appropriate
+                $updPay = $pdo->prepare("UPDATE payments SET unit_id = :uid WHERE tenant_id = :tid AND status = 'pending'");
+                $updPay->execute([':uid' => $targetUnitId, ':tid' => $tenantId]);
+
+                $pdo->commit();
+
+                // Send notification
+                NotificationService::notifyTenant(
+                    $pdo,
+                    $tenantId,
+                    'account',
+                    'Unit Transfer Completed',
+                    "You have been successfully transferred to {$targetUnit['unit_number']}.",
+                    'tenantProfile',
+                    $tenantId,
+                    'tenant_transferred'
+                );
+
+                echo json_encode([
+                    'status' => 'success',
+                    'message' => "Tenant '{$targetTenant['name']}' transferred to {$targetUnit['unit_number']} successfully.",
+                    'unit_id' => $targetUnitId
+                ]);
+                exit;
+            } catch (PDOException $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                if (strpos($e->getMessage(), 'already occupied') !== false || strpos($e->getMessage(), 'uq_active_tenant_unit') !== false || $e->getCode() === '45000') {
+                    http_response_code(409);
+                    echo json_encode([
+                        'status' => 'error',
+                        'message' => 'This unit is already occupied and has an existing tenant account. Only one tenant account is allowed per unit.'
+                    ]);
+                    exit;
+                }
+                throw $e;
+            }
+        }
+
         // CREATE ACTION (Provision New Tenant with Auto-Generated Credentials)
         if ($action === 'create') {
             $name = trim((string)($input['name'] ?? ''));
@@ -213,10 +315,32 @@ try {
                 exit;
             }
 
+            // Concurrency Lock & Validation: Only ONE active tenant account per apartment unit
+            $pdo->beginTransaction();
+            $unitOccupancyStmt = $pdo->prepare("
+                SELECT id, name FROM users 
+                WHERE unit_id = :unit_id AND role = 'tenant' AND is_active = 1 
+                LIMIT 1 
+                FOR UPDATE
+            ");
+            $unitOccupancyStmt->execute([':unit_id' => $unitId]);
+            $occupiedTenant = $unitOccupancyStmt->fetch();
+
+            if ($occupiedTenant) {
+                $pdo->rollBack();
+                http_response_code(409);
+                echo json_encode([
+                    'status' => 'error',
+                    'message' => 'This unit is already occupied and has an existing tenant account. Only one tenant account is allowed per unit.'
+                ]);
+                exit;
+            }
+
             // Check uniqueness of email
             $dupStmt = $pdo->prepare("SELECT id FROM users WHERE email = :e LIMIT 1");
             $dupStmt->execute([':e' => $email]);
             if ($dupStmt->fetch()) {
+                $pdo->rollBack();
                 http_response_code(409);
                 echo json_encode([
                     'status' => 'error',
@@ -292,6 +416,27 @@ try {
 
             $newId = (int)$pdo->lastInsertId();
 
+            // Auto-generate notifications for Landlord and new Tenant
+            NotificationService::notifyLandlords(
+                $pdo,
+                'account',
+                'New Tenant Assigned',
+                "A new tenant ({$name}) has been assigned to {$unit['unit_number']}.",
+                'sectionDirectory',
+                $newId,
+                'tenant_registered'
+            );
+            NotificationService::notifyTenant(
+                $pdo,
+                $newId,
+                'account',
+                'Welcome to RentConnect',
+                "Welcome to RentConnect! You have been assigned to {$unit['unit_number']}.",
+                'tenantProfile',
+                $newId,
+                'tenant_welcome'
+            );
+
             // Auto-Generate Placeholder Payment with Hardcoded Unit Pricing:
             // Unit 1: 1 Bedroom, ₱6,000 | Unit 2: 2 Bedrooms, ₱8,000 | Unit 3: 3 Bedrooms, ₱8,000
             $HARDCODED_UNITS = [
@@ -330,6 +475,9 @@ try {
             $pdo->prepare("UPDATE apartment_settings SET active_tenant_id = :tid, monthly_rent = :rent, updated_at = NOW() WHERE id = 1")
                 ->execute([':tid' => $newId, ':rent' => $rentAmount]);
 
+            // Commit transaction
+            $pdo->commit();
+
             echo json_encode([
                 'status' => 'success',
                 'message' => "Tenant '{$name}' created and assigned to {$unit['unit_number']} successfully!",
@@ -352,6 +500,17 @@ try {
     }
 
 } catch (Throwable $e) {
+    if (isset($pdo) && $pdo->inTransaction()) {
+        $pdo->rollBack();
+    }
+    if (strpos($e->getMessage(), 'already occupied') !== false || strpos($e->getMessage(), 'uq_active_tenant_unit') !== false || (string)$e->getCode() === '45000') {
+        http_response_code(409);
+        echo json_encode([
+            'status' => 'error',
+            'message' => 'This unit is already occupied and has an existing tenant account. Only one tenant account is allowed per unit.'
+        ]);
+        exit;
+    }
     http_response_code(500);
     echo json_encode([
         'status' => 'error',

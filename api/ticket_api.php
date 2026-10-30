@@ -9,6 +9,7 @@ declare(strict_types=1);
 header('Content-Type: application/json; charset=UTF-8');
 
 require_once __DIR__ . '/../config/auth.php';
+require_once __DIR__ . '/../includes/notification_service.php';
 
 $requestMethod = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
@@ -49,6 +50,31 @@ try {
                 ':c' => $actualCost,
                 ':id' => $ticketId
             ]);
+
+            // Notify Tenant about ticket status update
+            $ticketStmt = $pdo->prepare("SELECT tenant_id, title FROM maintenance_tickets WHERE id = :id LIMIT 1");
+            $ticketStmt->execute([':id' => $ticketId]);
+            $ticketRow = $ticketStmt->fetch();
+
+            if ($ticketRow && !empty($ticketRow['tenant_id'])) {
+                $statusLabel = ucfirst($newStatus);
+                $titleText = ($newStatus === 'resolved' || $newStatus === 'closed') 
+                    ? 'Maintenance Request Resolved' 
+                    : 'Maintenance Ticket Updated';
+                $msgText = ($newStatus === 'resolved')
+                    ? "Your maintenance request #{$ticketId} ('{$ticketRow['title']}') is now marked as Resolved."
+                    : "The owner updated maintenance ticket #{$ticketId} ('{$ticketRow['title']}') to status: {$statusLabel}.";
+                NotificationService::notifyTenant(
+                    $pdo,
+                    (int)$ticketRow['tenant_id'],
+                    'maintenance',
+                    $titleText,
+                    $msgText,
+                    'tenantProfile',
+                    $ticketId,
+                    'ticket_status_' . $newStatus
+                );
+            }
 
             echo json_encode([
                 'status' => 'success',
@@ -166,6 +192,19 @@ try {
         ]);
 
         $newId = (int)$pdo->lastInsertId();
+
+        // Notify Landlords of newly logged maintenance ticket
+        $tenantName = $tenantUser['name'] ?? 'Tenant';
+        $unitText = $unitId ? " for Unit {$unitId}" : '';
+        NotificationService::notifyLandlords(
+            $pdo,
+            'maintenance',
+            'New Maintenance Ticket',
+            "New maintenance ticket #{$newId} ('{$title}') submitted by {$tenantName}{$unitText}.",
+            'sectionTickets',
+            $newId,
+            'ticket_open'
+        );
 
         echo json_encode([
             'status' => 'success',

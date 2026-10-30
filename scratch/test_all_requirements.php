@@ -46,13 +46,15 @@ $randomPass = str_pad((string)random_int(100000, 999999), 6, '0', STR_PAD_LEFT);
 assertTest("Generated password is 6 digits", strlen($randomPass) === 6 && ctype_digit($randomPass), "Got $randomPass");
 
 // 3. Test Creating Tenant via DB & verify password hash
+$vacantUnitId = (int)($pdo->query("SELECT id FROM units WHERE id NOT IN (SELECT unit_id FROM users WHERE role = 'tenant' AND is_active = 1 AND unit_id IS NOT NULL) LIMIT 1")->fetchColumn() ?: 2);
 $testEmail = 'test_tenant_verify_' . time() . '@example.com';
 $hash = password_hash($randomPass, PASSWORD_BCRYPT);
 $ins = $pdo->prepare("
     INSERT INTO users (unit_id, username, name, email, password_hash, role, phone, birthday, emergency_contact_name, emergency_contact_relationship, emergency_contact_phone, is_active, created_at)
-    VALUES (1, :u, 'Test Auto Tenant', :e, :h, 'tenant', '09123456789', '1998-05-15', 'Deloris Jordan', 'Mother', '09998887777', 1, NOW())
+    VALUES (:unit_id, :u, 'Test Auto Tenant', :e, :h, 'tenant', '09123456789', '1998-05-15', 'Deloris Jordan', 'Mother', '09998887777', 1, NOW())
 ");
 $ins->execute([
+    ':unit_id' => $vacantUnitId,
     ':u' => $nextUsername,
     ':e' => $testEmail,
     ':h' => $hash

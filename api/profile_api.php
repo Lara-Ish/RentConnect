@@ -10,6 +10,7 @@ header('Content-Type: application/json; charset=UTF-8');
 
 require_once __DIR__ . '/../config/auth.php';
 require_once __DIR__ . '/../includes/verification_service.php';
+require_once __DIR__ . '/../includes/notification_service.php';
 
 $requestMethod = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
@@ -624,6 +625,20 @@ try {
                 $_SESSION['user']['phone'] = $phone;
             }
 
+            // If tenant updated info, notify landlord
+            if (!Auth::isLandlord()) {
+                $tenantName = $user['name'] ?? 'Tenant';
+                NotificationService::notifyLandlords(
+                    $pdo,
+                    'account',
+                    'Tenant Profile Updated',
+                    "{$tenantName} updated their profile and emergency contact information.",
+                    'sectionDirectory',
+                    $userId,
+                    'tenant_profile_update'
+                );
+            }
+
             echo json_encode([
                 'status' => 'success',
                 'message' => 'Account information updated successfully!'
@@ -649,6 +664,22 @@ try {
                 WHERE id = :id AND role = 'tenant'
             ");
             $stmt->execute([':status' => $decision, ':id' => $targetTenantId]);
+
+            // Notify Tenant of ID verification decision
+            $title = ($decision === 'verified') ? 'ID Verification Approved' : 'ID Verification Rejected';
+            $msg = ($decision === 'verified')
+                ? 'Your ID document has been verified by the landlord. Your account is fully verified.'
+                : 'Your ID verification was not approved. Please re-submit a valid official ID.';
+            NotificationService::notifyTenant(
+                $pdo,
+                $targetTenantId,
+                'account',
+                $title,
+                $msg,
+                'tenantProfile',
+                $targetTenantId,
+                'id_verification_' . $decision
+            );
 
             echo json_encode([
                 'status' => 'success',

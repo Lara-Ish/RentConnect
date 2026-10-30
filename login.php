@@ -278,6 +278,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       transform: translateY(0);
       transition: opacity 0.5s ease, transform 0.5s ease;
     }
+
+    /* Forgot Password Text Link */
+    .forgot-password-wrapper {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      margin-top: 8px;
+      margin-bottom: 18px;
+    }
+
+    .forgot-password-link {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--clay-primary-dark);
+      text-decoration: none;
+      transition: color 0.2s ease, text-decoration 0.2s ease;
+      cursor: pointer;
+      display: inline-block;
+    }
+
+    .forgot-password-link:hover,
+    .forgot-password-link:focus {
+      color: #4f46e5;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
   </style>
 </head>
 <body>
@@ -323,7 +349,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             >
           </div>
 
-          <div class="form-group">
+          <div class="form-group" style="margin-bottom: 0;">
             <label for="password" class="form-label">Password</label>
             <input 
               type="password" 
@@ -335,7 +361,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             >
           </div>
 
-          <button type="submit" class="clay-btn clay-btn-primary clay-btn-full" style="margin-top: 14px;">
+          <div class="forgot-password-wrapper">
+            <a href="#" class="forgot-password-link" onclick="event.preventDefault();" title="Forgot Password?">Forgot Password?</a>
+          </div>
+
+          <button type="submit" class="clay-btn clay-btn-primary clay-btn-full" style="margin-top: 0;">
             <span>Log in</span>
           </button>
         </form>
