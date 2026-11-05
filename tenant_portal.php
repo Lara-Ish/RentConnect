@@ -7,37 +7,35 @@
 
 declare(strict_types=1);
 
+// Prevent browser caching so Back button cannot display protected portal after logout
+header("Cache-Control: no-store, no-cache, must-revalidate, max-age=0");
+header("Cache-Control: post-check=0, pre-check=0", false);
+header("Pragma: no-cache");
+header("Expires: Sat, 26 Jul 1997 05:00:00 GMT");
+
 require_once __DIR__ . '/config/auth.php';
 Auth::requireTenant();
 
 $user = Auth::user();
 $pdo = Database::getConnection();
 
-// Fetch fresh tenant user details (including verification status)
+// Fetch fresh tenant user details (including verification status and active state)
 $userStmt = $pdo->prepare("SELECT * FROM users WHERE id = :id LIMIT 1");
 $userStmt->execute([':id' => $user['id']]);
 $freshUser = $userStmt->fetch();
-if ($freshUser) {
-    $user = $freshUser;
+if (!$freshUser || (int)($freshUser['is_active'] ?? 0) !== 1) {
+    Auth::logout();
+    header('Location: login.php?msg=deactivated');
+    exit;
 }
+$user = $freshUser;
 
-// Resolve user avatar image URL dynamically from database record or uploaded face
-$userAvatarUrl = '';
-if (!empty($user['live_photo_filename'])) {
-    if (file_exists(__DIR__ . '/uploads/id_verifications/' . $user['live_photo_filename'])) {
-        $userAvatarUrl = 'uploads/id_verifications/' . htmlspecialchars($user['live_photo_filename']);
-    } elseif (file_exists(__DIR__ . '/uploads/live_captures/' . $user['live_photo_filename'])) {
-        $userAvatarUrl = 'uploads/live_captures/' . htmlspecialchars($user['live_photo_filename']);
-    } elseif (file_exists(__DIR__ . '/uploads/' . $user['live_photo_filename'])) {
-        $userAvatarUrl = 'uploads/' . htmlspecialchars($user['live_photo_filename']);
-    }
-}
-
-// Extract first letter of user's first name dynamically for profile icon
-$userFirstName = trim(explode(' ', trim($user['name'] ?? 'U'))[0]);
-$userInitial = strtoupper(mb_substr($userFirstName, 0, 1));
+// Extract first letter of user's first name dynamically for profile icon (circular initial)
+$userFullName = trim((string)($user['name'] ?? 'Tenant'));
+$userFirstName = trim(explode(' ', $userFullName)[0]);
+$userInitial = strtoupper(mb_substr($userFirstName, 0, 1, 'UTF-8'));
 if ($userInitial === '') {
-    $userInitial = 'U';
+    $userInitial = 'T';
 }
 
 // Fetch assigned unit details
@@ -45,7 +43,7 @@ $unitStmt = $pdo->prepare("SELECT * FROM units WHERE id = :uid LIMIT 1");
 $unitStmt->execute([':uid' => $user['unit_id'] ?? 1]);
 $unit = $unitStmt->fetch() ?: [
     'unit_number' => 'Unit 1',
-    'monthly_rent' => 6000.00
+    'monthly_rent' => 3000.00
 ];
 
 // Fetch tickets submitted by this tenant
@@ -54,10 +52,21 @@ $ticketsStmt->execute([':tid' => $user['id']]);
 $myTickets = $ticketsStmt->fetchAll();
 
 // Fetch payments for this tenant
-$paymentsStmt = $pdo->prepare("SELECT * FROM payments WHERE tenant_id = :tid ORDER BY billing_cycle DESC");
+$paymentsStmt = $pdo->prepare("SELECT * FROM payments WHERE tenant_id = :tid ORDER BY id DESC");
 $paymentsStmt->execute([':tid' => $user['id']]);
 $myPayments = $paymentsStmt->fetchAll();
 $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
+
+// Categorize payments into obligations
+$depositBill = null;
+$rentBill = null;
+foreach ($myPayments as $p) {
+    if ($p['payment_type'] === 'Advance Deposit' && !$depositBill) {
+        $depositBill = $p;
+    } elseif ($p['payment_type'] === 'Rent' && !$rentBill) {
+        $rentBill = $p;
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -83,13 +92,6 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
   <!-- Dedicated OCR Library (Tesseract.js) -->
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
-  <!-- face-api.js for 68-Point Facial Landmark Tracking (Local with CDN fallback) -->
-  <script src="assets/js/face-api.min.js"></script>
-  <script>
-    if (typeof faceapi === 'undefined') {
-      document.write('<script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.min.js"><\/script>');
-    }
-  </script>
 
   <style>
     .modal-backdrop {
@@ -125,173 +127,6 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
     @keyframes modalSlide {
       from { transform: translateY(20px) scale(0.96); opacity: 0; }
       to { transform: translateY(0) scale(1); opacity: 1; }
-    }
-
-    /* GCash-Style Semi-Transparent Dark Overlay across the <video> feed */
-    .gcash-camera-mask,
-    .face-oval-guide {
-      position: absolute;
-      inset: 0;
-      pointer-events: none;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 10;
-    }
-
-    /* Clear, transparent oval cutout in the exact center */
-    .face-oval-ring {
-      width: 175px;
-      height: 235px;
-      border: 3px solid rgba(255, 255, 255, 0.85);
-      border-radius: 50%;
-      /* 9999px box-shadow creates the semi-transparent dark overlay over the entire feed outside the cutout */
-      box-shadow: 0 0 0 9999px rgba(9, 13, 22, 0.72);
-      transition: border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease;
-      background: transparent;
-    }
-
-    .face-oval-ring.needs-closer {
-      border-color: #f59e0b !important;
-      border-style: dashed !important;
-      box-shadow: 0 0 0 9999px rgba(9, 13, 22, 0.72), 0 0 18px rgba(245, 158, 11, 0.5) !important;
-    }
-
-    .face-oval-ring.needs-center {
-      border-color: #f43f5e !important;
-      border-style: dashed !important;
-      box-shadow: 0 0 0 9999px rgba(9, 13, 22, 0.72), 0 0 18px rgba(244, 63, 94, 0.5) !important;
-    }
-
-    .face-oval-ring.multi-face {
-      border-color: #ef4444 !important;
-      border-style: solid !important;
-      box-shadow: 0 0 0 9999px rgba(9, 13, 22, 0.75), 0 0 22px rgba(239, 68, 68, 0.8) !important;
-    }
-
-    .face-oval-ring.challenge-active,
-    .face-oval-ring.detecting {
-      border-color: #38bdf8 !important;
-      border-style: solid !important;
-      box-shadow: 0 0 0 9999px rgba(9, 13, 22, 0.68), 0 0 20px rgba(56, 189, 248, 0.7) !important;
-    }
-
-    .face-oval-ring.turned,
-    .face-oval-ring.liveness-ready {
-      border-color: #a855f7 !important;
-      border-style: solid !important;
-      box-shadow: 0 0 0 9999px rgba(9, 13, 22, 0.65), 0 0 22px rgba(168, 85, 247, 0.75) !important;
-    }
-
-    .face-oval-ring.perfect-capturing,
-    .face-oval-ring.holding,
-    .face-oval-ring.verifying,
-    .face-oval-ring.captured {
-      border-color: #10b981 !important;
-      border-style: solid !important;
-      box-shadow: 0 0 0 9999px rgba(9, 13, 22, 0.6), 0 0 30px rgba(16, 185, 129, 0.9) !important;
-      transform: scale(1.02);
-    }
-
-    .face-oval-ring.spoof-detected {
-      border-color: #ef4444 !important;
-      border-style: solid !important;
-      box-shadow: 0 0 0 9999px rgba(9, 13, 22, 0.75), 0 0 25px rgba(239, 68, 68, 0.85) !important;
-    }
-
-    .face-status-pill {
-      position: absolute;
-      bottom: 12px;
-      left: 16px;
-      right: 16px;
-      background: rgba(15, 23, 42, 0.88);
-      backdrop-filter: blur(6px);
-      -webkit-backdrop-filter: blur(6px);
-      color: #ffffff;
-      padding: 7px 14px;
-      border-radius: 999px;
-      font-size: 11.5px;
-      font-weight: 700;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
-      transition: all 0.2s ease;
-      z-index: 10;
-    }
-
-    .face-status-pill.status-liveness,
-    .face-status-pill.challenge-active {
-      background: rgba(14, 165, 233, 0.92);
-      color: #f0f9ff;
-    }
-
-    .face-status-pill.status-turned {
-      background: rgba(168, 85, 247, 0.92);
-      color: #faf5ff;
-    }
-
-    .face-status-pill.status-holding,
-    .face-status-pill.perfect-capturing {
-      background: rgba(5, 150, 105, 0.92);
-      color: #ecfdf5;
-    }
-
-    .face-status-pill.status-spoof,
-    .face-status-pill.multi-face {
-      background: rgba(225, 29, 72, 0.95);
-      color: #fff1f2;
-    }
-
-    .face-status-pill.needs-closer,
-    .face-status-pill.needs-center {
-      background: rgba(217, 119, 6, 0.92);
-      color: #fffbeb;
-    }
-
-    .face-spoof-warning {
-      position: absolute;
-      top: 10px;
-      left: 12px;
-      right: 12px;
-      background: rgba(225, 29, 72, 0.96);
-      backdrop-filter: blur(8px);
-      color: #ffffff;
-      padding: 8px 12px;
-      border-radius: 12px;
-      font-size: 11.5px;
-      font-weight: 800;
-      text-align: center;
-      box-shadow: 0 4px 16px rgba(225, 29, 72, 0.4);
-      z-index: 25;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      line-height: 1.35;
-      animation: spoofPulse 1.5s infinite alternate;
-    }
-
-    @keyframes spoofPulse {
-      from { transform: scale(1); }
-      to { transform: scale(1.02); }
-    }
-
-    .face-hold-progress-track {
-      width: 100%;
-      height: 6px;
-      background: #e2e8f0;
-      border-radius: 999px;
-      overflow: hidden;
-    }
-
-    .face-hold-progress-fill {
-      width: 0%;
-      height: 100%;
-      background: linear-gradient(90deg, #10b981, #059669);
-      border-radius: 999px;
-      transition: width 0.1s linear;
     }
 
     /* Inactive overlays must never block sidebar, settings, or dashboard buttons */
@@ -538,7 +373,7 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
 
           <!-- Circular Profile Icon Trigger with Dropdown Menu -->
           <div class="sidebar-settings-container header-settings-container" style="position: relative;">
-            <div class="header-avatar-badge" id="headerAvatarBadge" onclick="toggleSettingsMenu(event)" role="button" tabindex="0" title="Account &amp; Settings" style="cursor: pointer;">
+            <div class="header-avatar-badge" id="headerAvatarBadge" onclick="toggleSettingsMenu(event)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSettingsMenu(event);}" role="button" tabindex="0" title="Account &amp; Settings" style="cursor: pointer; border-radius: 50% !important;">
               <span class="header-avatar-initial"><?= htmlspecialchars($userInitial) ?></span>
             </div>
 
@@ -549,11 +384,7 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
                 <!-- Main Profile Display: Avatar/Initial & Full Name (Non-clickable) -->
                 <div class="fb-profile-main-row fb-profile-display-only">
                   <div class="fb-profile-avatar-circle">
-                    <?php if (!empty($userAvatarUrl)): ?>
-                      <img src="<?= $userAvatarUrl ?>" alt="<?= htmlspecialchars($user['name'] ?? 'Tenant') ?>">
-                    <?php else: ?>
-                      <span><?= htmlspecialchars($userInitial) ?></span>
-                    <?php endif; ?>
+                    <span><?= htmlspecialchars($userInitial) ?></span>
                   </div>
                   <div class="fb-profile-main-info">
                     <span class="fb-profile-name" id="profileDropdownName"><?= htmlspecialchars($user['name'] ?? 'Tenant') ?></span>
@@ -609,8 +440,12 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
             <h1>Welcome Home, <?= htmlspecialchars(explode(' ', $user['name'])[0]) ?>!</h1>
             <p>Here is your residency overview for <?= htmlspecialchars($unit['unit_number']) ?>.</p>
           </div>
-          <div class="clay-badge badge-paid" style="font-size: 13px; padding: 8px 18px;">
-            Monthly Rent: ₱<?= number_format((float)$unit['monthly_rent'], 2) ?>
+          <div class="clay-badge <?= ($currentPayment && $currentPayment['status'] === 'pending_setup') ? 'badge-pending' : 'badge-paid' ?>" style="font-size: 13px; padding: 8px 18px;">
+            <?php if ($currentPayment && $currentPayment['status'] === 'pending_setup'): ?>
+              ⏳ Rent Setup in Progress
+            <?php else: ?>
+              Monthly Rent: ₱<?= number_format((float)$unit['monthly_rent'], 2) ?>
+            <?php endif; ?>
           </div>
         </div>
 
@@ -623,7 +458,7 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
             </div>
             <div>
               <h4 style="font-size: 15px; font-weight: 800; color: #9f1239; margin: 0 0 3px 0;">Please verify your account</h4>
-              <p style="font-size: 13px; color: #881337; margin: 0; line-height: 1.4;">Submit a valid government-issued ID and a quick live face scan to activate all tenant features.</p>
+              <p style="font-size: 13px; color: #881337; margin: 0; line-height: 1.4;">Submit a valid government-issued ID to activate all tenant features.</p>
             </div>
           </div>
           <button type="button" class="clay-btn clay-btn-primary" style="padding: 10px 22px; font-size: 13px; background: linear-gradient(135deg, #f43f5e, #e11d48); box-shadow: 4px 4px 12px rgba(225, 29, 72, 0.35);" onclick="openProfileView('accountInfo')">
@@ -647,11 +482,19 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
               <span class="kpi-label">Current Rent Status</span>
               <div class="kpi-icon kpi-icon-revenue">💵</div>
             </div>
-            <div class="kpi-value" style="font-size: 24px;">
-              <?= $currentPayment ? strtoupper($currentPayment['status']) : 'PAID' ?>
+            <div class="kpi-value" style="font-size: 20px;">
+              <?php if ($currentPayment && $currentPayment['status'] === 'pending_setup'): ?>
+                <span style="color: #b45309; font-weight: 800; font-size: 17px;">Pending Setup</span>
+              <?php else: ?>
+                <?= $currentPayment ? strtoupper($currentPayment['status']) : 'PAID' ?>
+              <?php endif; ?>
             </div>
             <div class="kpi-subtitle">
-              <span>₱<?= number_format((float)$unit['monthly_rent'], 2) ?> Due on 5th</span>
+              <?php if ($currentPayment && $currentPayment['status'] === 'pending_setup'): ?>
+                <span style="color: #92400e; font-weight: 600;">Your rent details are being configured by the Owner.</span>
+              <?php else: ?>
+                <span>₱<?= number_format((float)($currentPayment['amount_due'] ?? $unit['monthly_rent']), 2) ?> <?= !empty($currentPayment['due_date']) ? 'Due on ' . date('M j', strtotime($currentPayment['due_date'])) : 'Due on 5th' ?></span>
+              <?php endif; ?>
             </div>
           </div>
 
@@ -698,9 +541,15 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
                 <p style="font-size: 13px; color: var(--text-muted);">No maintenance requests logged yet.</p>
               <?php else: ?>
                 <?php foreach (array_slice($myTickets, 0, 3) as $tk): ?>
-                <div class="ticket-item">
+                <div class="ticket-item clickable-ticket-item"
+                     style="cursor: pointer; transition: transform 0.15s ease, box-shadow 0.15s ease;"
+                     onclick="openTenantTicketModal(<?= htmlspecialchars(json_encode($tk), ENT_QUOTES, 'UTF-8') ?>)"
+                     title="Click to view ticket details and owner response">
                   <div>
-                    <h4 style="font-size: 14.5px; font-weight: 700; color: #1e293b;"><?= htmlspecialchars($tk['title']) ?></h4>
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 3px;">
+                      <span class="clay-badge" style="background: #e0e7ff; color: #4338ca; font-weight: 800; font-size: 10.5px;">#MT-<?= str_pad((string)$tk['id'], 4, '0', STR_PAD_LEFT) ?></span>
+                      <h4 style="font-size: 14.5px; font-weight: 700; color: #1e293b; margin: 0;"><?= htmlspecialchars($tk['title']) ?></h4>
+                    </div>
                     <div class="ticket-meta">
                       <span class="clay-badge badge-<?= strtolower($tk['category']) ?>"><?= $tk['category'] ?></span>
                       <span class="ticket-date"><?= date('M j, Y', strtotime($tk['created_at'])) ?></span>
@@ -731,10 +580,20 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
                 <?php foreach (array_slice($myPayments, 0, 3) as $pay): ?>
                 <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: var(--clay-input-bg); border-radius: var(--radius-md); box-shadow: var(--clay-sunken-shadow);">
                   <div>
-                    <div style="font-size: 13.5px; font-weight: 700; color: #0f172a;"><?= date('F Y', strtotime($pay['billing_cycle'])) ?></div>
-                    <div style="font-size: 11.5px; color: var(--text-muted);">₱<?= number_format((float)$pay['amount_paid'], 2) ?> on <?= $pay['payment_date'] ?? 'Pending' ?></div>
+                    <div style="font-size: 13.5px; font-weight: 700; color: #0f172a;"><?= !empty($pay['billing_cycle']) ? date('F Y', strtotime($pay['billing_cycle'])) : 'Pending Setup' ?></div>
+                    <div style="font-size: 11.5px; color: var(--text-muted);">
+                      <?php if ($pay['status'] === 'pending_setup'): ?>
+                        Rent setup pending with landlord
+                      <?php else: ?>
+                        ₱<?= number_format((float)$pay['amount_paid'], 2) ?> on <?= $pay['payment_date'] ?? 'Pending' ?>
+                      <?php endif; ?>
+                    </div>
                   </div>
-                  <span class="clay-badge badge-<?= $pay['status'] ?>"><?= strtoupper($pay['status']) ?></span>
+                  <?php if ($pay['status'] === 'pending_setup'): ?>
+                    <span class="clay-badge" style="background: #fef3c7; color: #92400e; font-weight: 700; border: 1px solid rgba(245, 158, 11, 0.3); font-size: 10px;">PENDING SETUP</span>
+                  <?php else: ?>
+                    <span class="clay-badge badge-<?= $pay['status'] ?>"><?= strtoupper($pay['status']) ?></span>
+                  <?php endif; ?>
                 </div>
                 <?php endforeach; ?>
               <?php endif; ?>
@@ -839,28 +698,32 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
 
             <div style="margin-top: 16px;" id="ticketHistoryContainer">
               <?php if (empty($myTickets)): ?>
-                <p style="font-size: 13px; color: var(--text-muted); text-align: center; padding: 20px;">No tickets logged yet.</p>
+                <p style="font-size: 13px; color: var(--text-muted); text-align: center; padding: 20px;" id="noTicketsMsg">No tickets logged yet.</p>
               <?php else: ?>
                 <?php foreach ($myTickets as $tk): ?>
-                <div class="ticket-item">
+                <div class="ticket-item clickable-ticket-item" 
+                     style="cursor: pointer; transition: transform 0.15s ease, box-shadow 0.15s ease;"
+                     onclick="openTenantTicketModal(<?= htmlspecialchars(json_encode($tk), ENT_QUOTES, 'UTF-8') ?>)"
+                     title="Click to view complete ticket details and owner response">
                   <div>
-                    <h4 style="font-size: 15px; font-weight: 700; color: #1e293b;"><?= htmlspecialchars($tk['title']) ?></h4>
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+                      <span class="clay-badge" style="background: #e0e7ff; color: #4338ca; font-weight: 800; font-size: 11px;">#MT-<?= str_pad((string)$tk['id'], 4, '0', STR_PAD_LEFT) ?></span>
+                      <h4 style="font-size: 15px; font-weight: 700; color: #1e293b; margin: 0;"><?= htmlspecialchars($tk['title']) ?></h4>
+                    </div>
                     <div class="ticket-meta">
                       <span class="clay-badge badge-<?= strtolower($tk['category']) ?>"><?= $tk['category'] ?></span>
+                      <span class="clay-badge badge-<?= $tk['priority'] ?>"><?= strtoupper($tk['priority']) ?></span>
                       <span class="ticket-date"><?= date('M j, Y', strtotime($tk['created_at'])) ?></span>
                       <?php if (!empty($tk['photo_path'])): ?>
-                        <?php 
-                          $pList = explode(',', $tk['photo_path']);
-                          foreach ($pList as $pIdx => $pItem): 
-                            $pItem = trim($pItem);
-                            if (!$pItem) continue;
-                        ?>
-                          <a href="<?= htmlspecialchars($pItem) ?>" target="_blank" class="btn-inspect-proof" style="font-size: 11px; padding: 2px 7px; margin-left: 4px;">
-                            📷 Photo <?= count($pList) > 1 ? ($pIdx + 1) : '' ?>
-                          </a>
-                        <?php endforeach; ?>
+                        <span class="clay-badge badge-low" style="font-size: 10px;">📷 Photos attached</span>
                       <?php endif; ?>
                     </div>
+                    <?php if (!empty($tk['resolution_notes'])): ?>
+                      <div style="font-size: 12px; color: #047857; margin-top: 6px; font-weight: 600; display: flex; align-items: center; gap: 5px;">
+                        <span>💬</span>
+                        <span>Owner responded: <?= htmlspecialchars(substr($tk['resolution_notes'], 0, 45)) ?><?= strlen($tk['resolution_notes']) > 45 ? '...' : '' ?></span>
+                      </div>
+                    <?php endif; ?>
                   </div>
                   <span class="clay-badge badge-<?= $tk['status'] ?>"><?= strtoupper($tk['status']) ?></span>
                 </div>
@@ -892,20 +755,74 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
               <span class="widget-badge">Secure Ledger</span>
             </div>
 
+            <!-- Payment Obligations Overview: Advance Deposit & Monthly Rent -->
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin-top: 14px; margin-bottom: 18px;">
+              <div style="padding: 14px 16px; border-radius: var(--radius-md); background: #f5f3ff; border: 1.5px solid #ddd6fe;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                  <span style="font-size: 11px; font-weight: 800; color: #6d28d9; text-transform: uppercase;">1. Advance Deposit</span>
+                  <span class="clay-badge" style="background: <?= ($depositBill && $depositBill['status'] === 'approved') ? '#d1fae5' : (($depositBill && $depositBill['status'] === 'pending') ? '#fef3c7' : '#fee2e2') ?>; color: <?= ($depositBill && $depositBill['status'] === 'approved') ? '#065f46' : (($depositBill && $depositBill['status'] === 'pending') ? '#92400e' : '#991b1b') ?>; font-size: 10px; font-weight: 800; padding: 2px 7px;">
+                    <?= $depositBill ? ($depositBill['status'] === 'pending' ? 'PENDING REVIEW' : strtoupper($depositBill['status'])) : 'UNPAID' ?>
+                  </span>
+                </div>
+                <div style="font-size: 20px; font-weight: 800; color: #4c1d95; margin-top: 6px;">₱3,000.00</div>
+                <div style="font-size: 11.5px; color: #6b21a8; margin-top: 4px;">One-time security deposit upon account creation</div>
+              </div>
+
+              <div style="padding: 14px 16px; border-radius: var(--radius-md); background: #f0fdf4; border: 1.5px solid #bbf7d0;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                  <span style="font-size: 11px; font-weight: 800; color: #15803d; text-transform: uppercase;">2. Monthly Rent</span>
+                  <span class="clay-badge" style="background: <?= ($rentBill && $rentBill['status'] === 'approved') ? '#d1fae5' : (($rentBill && $rentBill['status'] === 'pending') ? '#fef3c7' : '#fee2e2') ?>; color: <?= ($rentBill && $rentBill['status'] === 'approved') ? '#065f46' : (($rentBill && $rentBill['status'] === 'pending') ? '#92400e' : '#991b1b') ?>; font-size: 10px; font-weight: 800; padding: 2px 7px;">
+                    <?= $rentBill ? ($rentBill['status'] === 'pending' ? 'PENDING REVIEW' : strtoupper($rentBill['status'])) : 'UNPAID' ?>
+                  </span>
+                </div>
+                <div style="font-size: 20px; font-weight: 800; color: #14532d; margin-top: 6px;">₱3,000.00</div>
+                <div style="font-size: 11.5px; color: #166534; margin-top: 4px;">Recurring monthly rental fee for <?= htmlspecialchars($unit['unit_number']) ?></div>
+              </div>
+            </div>
+
+            <!-- Target Bill Selection -->
+            <div style="margin-bottom: 16px;">
+              <label for="payTargetPayment" class="form-label">Payment Category / Bill</label>
+              <div class="select-wrapper">
+                <select id="payTargetPayment" class="clay-select" onchange="handleTargetBillChange()">
+                  <?php if (!empty($myPayments)): ?>
+                    <?php foreach ($myPayments as $py): ?>
+                      <option value="<?= $py['id'] ?>"
+                              data-type="<?= htmlspecialchars($py['payment_type'] ?? 'Rent') ?>"
+                              data-amount="<?= number_format((float)($py['amount_due'] ?? 3000.00), 2, '.', '') ?>"
+                              data-cycle="<?= htmlspecialchars($py['billing_cycle'] ?? date('Y-m-01')) ?>"
+                              <?= ($py['status'] !== 'approved' && (!isset($firstUnpaid) || !$firstUnpaid)) ? ($firstUnpaid = true ? 'selected' : '') : '' ?>>
+                        <?= htmlspecialchars($py['payment_type'] ?? 'Rent') ?> — ₱<?= number_format((float)($py['amount_due'] ?? 3000.00), 2) ?> (<?= strtoupper($py['status']) ?>)
+                      </option>
+                    <?php endforeach; ?>
+                  <?php else: ?>
+                    <option value="0" data-type="Advance Deposit" data-amount="3000.00" data-cycle="<?= date('Y-m-01') ?>">
+                      Advance Deposit — ₱3,000.00 (UNPAID)
+                    </option>
+                    <option value="0" data-type="Rent" data-amount="3000.00" data-cycle="<?= date('Y-m-01') ?>">
+                      Monthly Rent — ₱3,000.00 (UNPAID)
+                    </option>
+                  <?php endif; ?>
+                </select>
+              </div>
+            </div>
+
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; margin-bottom: 18px;">
               <div class="form-group" style="margin-bottom: 0;">
                 <label for="payCycle" class="form-label">Billing Cycle</label>
                 <div class="select-wrapper">
                   <select id="payCycle" class="clay-select">
-                    <option value="2026-10-01" selected>October 2026</option>
-                    <option value="2026-11-01">November 2026</option>
-                    <option value="2026-09-01">September 2026</option>
+                    <?php if ($currentPayment && !empty($currentPayment['billing_cycle'])): ?>
+                      <option value="<?= htmlspecialchars($currentPayment['billing_cycle']) ?>" selected><?= date('F Y', strtotime($currentPayment['billing_cycle'])) ?></option>
+                    <?php endif; ?>
+                    <option value="<?= date('Y-m-01') ?>" selected><?= date('F Y') ?></option>
+                    <option value="<?= date('Y-m-01', strtotime('-1 month')) ?>"><?= date('F Y', strtotime('-1 month')) ?></option>
                   </select>
                 </div>
               </div>
               <div class="form-group" style="margin-bottom: 0;">
                 <label for="payAmount" class="form-label">Amount Paid</label>
-                <input type="number" id="payAmount" class="clay-input" value="<?= number_format((float)$unit['monthly_rent'], 2, '.', '') ?>" step="0.01">
+                <input type="number" id="payAmount" class="clay-input" value="3000.00" step="0.01">
               </div>
             </div>
 
@@ -942,9 +859,15 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
               </div>
             </div>
 
+            <?php if ($currentPayment && $currentPayment['status'] === 'pending_setup'): ?>
+            <button type="button" class="clay-btn clay-btn-disabled clay-btn-full" disabled style="margin-top: 20px; opacity: 0.65; cursor: not-allowed; background: #94a3b8; color: #fff; box-shadow: none;">
+              <span>🔒 Rent Setup in Progress — Payment Disabled</span>
+            </button>
+            <?php else: ?>
             <button type="button" class="clay-btn clay-btn-success clay-btn-full" id="btnUploadReceipt" style="margin-top: 20px;">
               <span>📤 Submit Rent Payment Proof</span>
             </button>
+            <?php endif; ?>
           </div>
 
           <!-- Payment History Card -->
@@ -963,20 +886,42 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
                 <?php foreach ($myPayments as $py): ?>
                 <div style="display: flex; justify-content: space-between; align-items: flex-start; padding: 14px 18px; background: var(--clay-card-bg); border-radius: var(--radius-md); box-shadow: var(--clay-card-shadow-sm); border: 1px solid var(--clay-border); gap: 12px;">
                   <div>
-                    <div style="font-size: 14px; font-weight: 800; color: #0f172a;"><?= date('F Y', strtotime($py['billing_cycle'])) ?></div>
-                    <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">
-                      ₱<?= number_format((float)$py['amount_paid'], 2) ?> paid on <?= $py['payment_date'] ?? 'Pending' ?>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                      <span class="clay-badge" style="background: <?= ($py['payment_type'] ?? '') === 'Advance Deposit' ? '#ede9fe; color: #6d28d9; border: 1px solid rgba(109,40,217,0.25);' : '#eff6ff; color: #1d4ed8; border: 1px solid rgba(29,78,216,0.25);' ?> font-size: 10px; font-weight: 700; padding: 2px 7px;">
+                        <?= htmlspecialchars($py['payment_type'] ?? 'Rent') ?>
+                      </span>
+                      <span style="font-size: 14px; font-weight: 800; color: #0f172a;">
+                        <?= !empty($py['billing_cycle']) ? date('F Y', strtotime($py['billing_cycle'])) : 'Pending Setup' ?>
+                      </span>
+                    </div>
+                    <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
+                      <?php if ($py['status'] === 'pending_setup'): ?>
+                        Amount: <?= $py['amount_due'] !== null ? '₱' . number_format((float)$py['amount_due'], 2) : 'Awaiting configuration by Owner' ?>
+                      <?php elseif ($py['status'] === 'unpaid'): ?>
+                        Amount Due: ₱<?= number_format((float)$py['amount_due'], 2) ?> (Due: <?= !empty($py['due_date']) ? date('M j, Y', strtotime($py['due_date'])) : 'Pending' ?>)
+                      <?php else: ?>
+                        ₱<?= number_format((float)$py['amount_paid'], 2) ?> paid on <?= $py['payment_date'] ?? 'Pending' ?>
+                      <?php endif; ?>
                     </div>
                     <?php if (!empty($py['verification_notes'])): ?>
-                      <div style="font-size: 11.5px; color: <?= $py['status'] === 'rejected' ? '#b91c1c' : '#047857' ?>; margin-top: 6px; font-weight: 600;">
+                      <div style="font-size: 11.5px; color: <?= $py['status'] === 'rejected' ? '#b91c1c' : ($py['status'] === 'pending_setup' ? '#d97706' : '#047857') ?>; margin-top: 6px; font-weight: 600;">
                         Feedback: <?= htmlspecialchars($py['verification_notes']) ?>
                       </div>
                     <?php endif; ?>
                   </div>
                   <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 8px;">
-                    <span class="clay-badge badge-<?= strtolower($py['status']) ?>">
-                      <?= $py['status'] === 'pending' ? 'PENDING VERIFICATION' : ($py['status'] === 'approved' ? '✓ VERIFIED' : strtoupper($py['status'])) ?>
-                    </span>
+                    <?php if ($py['status'] === 'pending_setup'): ?>
+                      <span class="clay-badge" style="background: #fef3c7; color: #92400e; font-weight: 700; border: 1px solid rgba(245, 158, 11, 0.3); font-size: 11px;">PENDING SETUP</span>
+                    <?php elseif ($py['status'] === 'unpaid'): ?>
+                      <div style="display: flex; align-items: center; gap: 6px;">
+                        <span class="clay-badge" style="background: #fee2e2; color: #991b1b; font-weight: 700; border: 1px solid rgba(239, 68, 68, 0.3); font-size: 11px;">UNPAID</span>
+                        <button type="button" class="clay-btn clay-btn-primary" style="padding: 4px 10px; font-size: 11px; font-weight: 700; border-radius: 6px;" onclick="selectBillToPay(<?= (int)$py['id'] ?>)">Pay</button>
+                      </div>
+                    <?php else: ?>
+                      <span class="clay-badge badge-<?= strtolower($py['status']) ?>">
+                        <?= $py['status'] === 'pending' ? 'PENDING VERIFICATION' : ($py['status'] === 'approved' ? '✓ VERIFIED' : strtoupper($py['status'])) ?>
+                      </span>
+                    <?php endif; ?>
                     <?php if ($py['receipt_filename']): ?>
                       <a href="uploads/receipts/<?= htmlspecialchars($py['receipt_filename']) ?>" target="_blank" class="btn-inspect-proof">📄 Proof</a>
                     <?php endif; ?>
@@ -1024,24 +969,22 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
                 <div class="clay-card-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 22px; flex-wrap: wrap; gap: 12px;">
                   <div>
                     <h2 class="clay-card-title">Account Information</h2>
-                    <p class="clay-card-subtitle">Personal records, unit assignment, and identity verification</p>
+                    <p class="clay-card-subtitle">Personal records and unit assignment details</p>
                   </div>
                   <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
                     <button type="button" class="clay-btn clay-btn-secondary" style="padding: 7px 16px; font-size: 12.5px;" onclick="openEditAccountInfoModal()">
                       ✏️ Edit Information
                     </button>
-                    <?php if (($user['verification_status'] ?? 'unverified') === 'verified'): ?>
-                      <span class="clay-badge badge-verified" style="font-size: 13px; padding: 7px 16px;">
-                        <span>✓</span> Verified Resident
-                      </span>
-                    <?php elseif (($user['verification_status'] ?? '') === 'pending'): ?>
-                      <span class="clay-badge badge-pending" style="font-size: 13px; padding: 7px 16px;">
-                        <span>⏳</span> Pending Review
-                      </span>
-                    <?php else: ?>
-                      <span class="clay-badge badge-unverified" style="font-size: 13px; padding: 7px 16px;">
-                        <span>⚠️</span> Unverified Account
-                      </span>
+                    <?php if (($user['verification_status'] ?? 'unverified') !== 'verified'): ?>
+                      <?php if (($user['verification_status'] ?? '') === 'pending'): ?>
+                        <span class="clay-badge badge-pending" style="font-size: 13px; padding: 7px 16px;">
+                          <span>⏳</span> Pending Review
+                        </span>
+                      <?php else: ?>
+                        <span class="clay-badge badge-unverified" style="font-size: 13px; padding: 7px 16px;">
+                          <span>⚠️</span> Unverified Account
+                        </span>
+                      <?php endif; ?>
                     <?php endif; ?>
                   </div>
                 </div>
@@ -1089,14 +1032,9 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
                     <span class="detail-label">Role:</span>
                     <span class="detail-value" style="font-size: 15px; font-weight: 700; text-transform: capitalize;"><?= htmlspecialchars($user['role']) ?></span>
                   </div>
-                  <div class="detail-item">
-                    <span class="detail-label">Account Verification:</span>
-                    <span class="detail-value" style="font-size: 15px; font-weight: 700;">
-                      <?= ucfirst(htmlspecialchars($user['verification_status'] ?? 'unverified')) ?>
-                    </span>
-                  </div>
                 </div>
 
+                <?php if (($user['verification_status'] ?? 'unverified') !== 'verified'): ?>
                 <!-- Verification Action / Status Container -->
                 <div style="margin-top: 24px; padding-top: 20px; border-top: 2px dashed rgba(166, 180, 204, 0.4);">
                   <?php if (($user['verification_status'] ?? 'unverified') === 'unverified'): ?>
@@ -1119,7 +1057,7 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
                               <span style="font-size: 20px;">🪪</span>
                               <div style="font-size: 15px; font-weight: 800; color: #9f1239;">Identity Verification Needed</div>
                             </div>
-                            <div style="font-size: 13px; color: #881337;">Submit a photo of your valid government or student ID and complete a live face scan to verify your identity.</div>
+                            <div style="font-size: 13px; color: #881337;">Submit a photo of your valid government or student ID to verify your identity.</div>
                           <?php endif; ?>
                         </div>
                         <button type="button" class="clay-btn clay-btn-primary" id="btnVerifyAccount" onclick="openVerifyAccountModal()" style="background: linear-gradient(135deg, #f43f5e, #e11d48); box-shadow: 6px 6px 14px rgba(225, 29, 72, 0.35); padding: 10px 22px;">
@@ -1157,24 +1095,9 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
                         <?php endif; ?>
                       </div>
                     </div>
-                  <?php else: ?>
-                    <div style="background: #ecfdf5; border: 1.5px solid #a7f3d0; border-radius: var(--radius-lg); padding: 18px 22px;">
-                      <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 6px;">
-                        <span style="font-size: 20px;">✅</span>
-                        <div style="font-size: 15px; font-weight: 800; color: #065f46;">Account Fully Verified</div>
-                      </div>
-                      <div style="font-size: 13px; color: #047857;">
-                        Verified with <strong><?= htmlspecialchars($user['id_type'] ?? 'Official ID') ?></strong>.
-                        <?php if (!empty($user['id_photo_filename'])): ?>
-                          <a href="uploads/id_verifications/<?= htmlspecialchars($user['id_photo_filename']) ?>" target="_blank" style="margin-left: 10px; color: #065f46; font-weight: 700; text-decoration: underline;">View ID Document</a>
-                        <?php endif; ?>
-                        <?php if (!empty($user['live_photo_filename'])): ?>
-                          <a href="uploads/id_verifications/<?= htmlspecialchars($user['live_photo_filename']) ?>" target="_blank" style="margin-left: 10px; color: #065f46; font-weight: 700; text-decoration: underline;">View Live Face Scan</a>
-                        <?php endif; ?>
-                      </div>
-                    </div>
                   <?php endif; ?>
                 </div>
+                <?php endif; ?>
               </div>
             </div>
 
@@ -1273,156 +1196,132 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
   </div>
 
   <!-- =====================================================================
-       MODAL: MULTI-STEP TENANT ID & LIVE FACE VERIFICATION INTERFACE
+       MODAL: TENANT VIEW MAINTENANCE TICKET DETAILS & OWNER RESPONSE
+       ===================================================================== -->
+  <div class="modal-backdrop" id="tenantTicketModal" style="display: none; pointer-events: none;">
+    <div class="clay-modal" style="max-width: 580px; width: 95%; max-height: 90vh; overflow-y: auto;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; border-bottom: 1px solid rgba(166, 180, 204, 0.2); padding-bottom: 12px;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span class="clay-badge" id="ttModalIdBadge" style="background: #e0e7ff; color: #4338ca; font-weight: 800; font-size: 13px;">#MT-0001</span>
+          <div>
+            <h2 style="font-size: 19px; font-weight: 800; color: #0f172a; margin: 0;" id="ttModalTitle">Issue Title</h2>
+            <p style="font-size: 12px; color: var(--text-muted); margin: 2px 0 0 0;">Maintenance request details and status tracking</p>
+          </div>
+        </div>
+        <button type="button" class="btn-remove-file" onclick="closeTenantTicketModal()" style="font-size: 18px;" title="Close">✕</button>
+      </div>
+
+      <!-- Metadata Badges -->
+      <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px;">
+        <span class="clay-badge" id="ttModalUnit" style="background: #e0e7ff; color: #4338ca; font-weight: 800;">Unit</span>
+        <span class="clay-badge" id="ttModalCategory">Category</span>
+        <span class="clay-badge" id="ttModalPriority">Priority</span>
+        <span class="clay-badge" id="ttModalStatus">Status</span>
+      </div>
+
+      <!-- Full Problem Description -->
+      <div style="background: var(--clay-input-bg); border-radius: var(--radius-md); padding: 14px 16px; margin-bottom: 16px; box-shadow: var(--clay-sunken-shadow);">
+        <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 6px;">Full Description of the Problem</div>
+        <p id="ttModalDesc" style="font-size: 13.5px; color: #1e293b; line-height: 1.5; white-space: pre-wrap; margin: 0;"></p>
+      </div>
+
+      <!-- Attached Photos / Attachments -->
+      <div id="ttModalPhotosSection" style="margin-bottom: 16px; display: none;">
+        <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 6px;">Attached Photos</div>
+        <div id="ttModalPhotosContainer" style="display: flex; gap: 8px; flex-wrap: wrap;"></div>
+      </div>
+
+      <!-- Owner's Response / Remarks -->
+      <div id="ttModalOwnerResponseSection" style="margin-bottom: 16px;">
+        <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 6px;">Owner's Response &amp; Remarks</div>
+        <div id="ttModalOwnerResponseBox" style="background: #f0fdf4; border: 1.5px solid #bbf7d0; border-radius: var(--radius-md); padding: 14px 16px; color: #166534; font-size: 13.5px; line-height: 1.5;">
+          <span id="ttModalOwnerResponseText">Awaiting response from property owner.</span>
+        </div>
+      </div>
+
+      <!-- Timestamps & Status Info -->
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 12px; color: var(--text-muted); border-top: 1px solid rgba(166, 180, 204, 0.2); padding-top: 12px; margin-bottom: 18px;">
+        <div>Date Submitted: <strong id="ttModalDateSubmitted" style="color: #0f172a;">-</strong></div>
+        <div>Date Resolved: <span id="ttModalDateResolved" style="color: #047857; font-weight: 600;">-</span></div>
+      </div>
+
+      <div style="display: flex; justify-content: flex-end;">
+        <button type="button" class="clay-btn clay-btn-primary" onclick="closeTenantTicketModal()" style="padding: 10px 24px;">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       MODAL: TENANT ID VERIFICATION INTERFACE
        ===================================================================== -->
   <div class="modal-backdrop" id="verifyAccountModal" style="display: none; pointer-events: none;">
-    <div class="clay-modal" style="max-width: 540px; width: 100%;">
+    <div class="clay-modal" style="max-width: 520px; width: 100%;">
       <!-- Modal Header -->
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
         <div>
           <h2 style="font-size: 20px; font-weight: 800; color: #0f172a; margin: 0 0 2px 0;">Verify Your Account</h2>
-          <p style="font-size: 12.5px; color: var(--text-muted); margin: 0;">Multi-step identity &amp; live biometric verification</p>
+          <p style="font-size: 12.5px; color: var(--text-muted); margin: 0;">Submit a valid government or student ID for residency verification</p>
         </div>
         <button type="button" class="btn-remove-file" onclick="closeVerifyAccountModal()" title="Close">✕</button>
-      </div>
-
-      <!-- Step Progress Indicator: 1. Upload ID -> 2. Live Testing -->
-      <div class="verification-step-indicator" style="display: flex; align-items: center; gap: 10px; margin-bottom: 20px; padding: 6px; background: rgba(226, 232, 240, 0.6); border-radius: 14px;">
-        <div id="stepPill1" class="step-pill active" style="flex: 1; padding: 8px 12px; border-radius: 10px; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 12px; font-weight: 800; background: var(--clay-surface); color: var(--clay-primary-dark); box-shadow: var(--clay-button-shadow); transition: all 0.2s ease;">
-          <span style="width: 22px; height: 22px; border-radius: 50%; background: var(--clay-primary); color: white; display: inline-flex; align-items: center; justify-content: center; font-size: 11px;">1</span>
-          <span>Upload Valid ID</span>
-        </div>
-        <div style="color: var(--text-muted); font-size: 14px; font-weight: 700;">→</div>
-        <div id="stepPill2" class="step-pill" style="flex: 1; padding: 8px 12px; border-radius: 10px; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 12px; font-weight: 800; background: transparent; color: var(--text-muted); transition: all 0.2s ease;">
-          <span style="width: 22px; height: 22px; border-radius: 50%; background: #cbd5e1; color: #475569; display: inline-flex; align-items: center; justify-content: center; font-size: 11px;">2</span>
-          <span>Live Testing</span>
-        </div>
       </div>
 
       <!-- Error / Alert Banner inside modal -->
       <div id="verifyModalAlert" style="display: none; margin-bottom: 16px; padding: 12px 16px; border-radius: var(--radius-md); font-size: 12.5px; font-weight: 600; line-height: 1.4; border: 1.5px solid #fecdd3; background: #fff1f2; color: #9f1239;"></div>
 
       <form id="verifyAccountForm" enctype="multipart/form-data">
-        <!-- ================= STEP 1: SELECT ID TYPE & UPLOAD ID ================= -->
-        <div id="verifyStep1View">
-          <!-- Dropdown menu to select a Valid ID Type -->
-          <div class="form-group" style="margin-bottom: 16px;">
-            <label class="form-label" for="idTypeSelect">Valid ID Type <span class="req">*</span></label>
-            <select id="idTypeSelect" name="id_type" class="clay-select" required>
-              <option value="" disabled selected> Select Valid ID Type </option>
-              <option value="National ID">National ID</option>
-              <option value="Driver's License">Driver's License</option>
-              <option value="Passport">Passport</option>
-              <option value="UMID">UMID</option>
-              <option value="SSS / GSIS ID">SSS / GSIS ID</option>
-              <option value="PRC ID">PRC ID</option>
-              <option value="Postal ID">Postal ID</option>
-              <option value="Voter's ID">Voter's ID</option>
-              <option value="PhilHealth ID">PhilHealth ID</option>
-              <option value="Student ID">Student ID</option>
-              <option value="Other Valid Government ID">Other Valid Government ID</option>
-            </select>
+        <!-- Dropdown menu to select a Valid ID Type -->
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label class="form-label" for="idTypeSelect">Valid ID Type <span class="req">*</span></label>
+          <select id="idTypeSelect" name="id_type" class="clay-select" required>
+            <option value="" disabled selected> Select Valid ID Type </option>
+            <option value="National ID">National ID</option>
+            <option value="Driver's License">Driver's License</option>
+            <option value="Passport">Passport</option>
+            <option value="UMID">UMID</option>
+            <option value="SSS / GSIS ID">SSS / GSIS ID</option>
+            <option value="PRC ID">PRC ID</option>
+            <option value="Postal ID">Postal ID</option>
+            <option value="Voter's ID">Voter's ID</option>
+            <option value="PhilHealth ID">PhilHealth ID</option>
+            <option value="Student ID">Student ID</option>
+            <option value="Other Valid Government ID">Other Valid Government ID</option>
+          </select>
+        </div>
+
+        <!-- File Upload Field to Submit a Photo of the ID -->
+        <div class="form-group">
+          <label class="form-label">Photo of Valid ID <span class="req">*</span></label>
+          <div class="drop-zone" id="idDropZone" style="cursor: pointer; padding: 24px 16px;">
+            <div class="drop-zone-icon" style="font-size: 34px;">🪪</div>
+            <div class="drop-zone-text" style="font-size: 14px; font-weight: 700;">Click to browse or drag &amp; drop ID photo</div>
+            <div class="drop-zone-hint" style="font-size: 12px; margin-top: 4px;">Supports JPG, PNG, WEBP (Max 10MB)</div>
           </div>
+          <input type="file" id="idFileInput" name="id_photo" accept="image/jpeg,image/png,image/webp" style="display: none;" required>
 
-          <!-- File Upload Field to Submit a Photo of the ID -->
-          <div class="form-group">
-            <label class="form-label">Photo of Valid ID <span class="req">*</span></label>
-            <div class="drop-zone" id="idDropZone" style="cursor: pointer; padding: 24px 16px;">
-              <div class="drop-zone-icon" style="font-size: 34px;">🪪</div>
-              <div class="drop-zone-text" style="font-size: 14px; font-weight: 700;">Click to browse or drag &amp; drop ID photo</div>
-              <div class="drop-zone-hint" style="font-size: 12px; margin-top: 4px;">Supports JPG, PNG, WEBP (Max 10MB)</div>
+          <!-- Visual ID Image Preview Card -->
+          <div id="idImagePreviewCard" style="display: none; margin-top: 14px; border-radius: var(--radius-lg); overflow: hidden; background: #0f172a; box-shadow: var(--clay-sunken-shadow); border: 1.5px solid rgba(203, 213, 225, 0.8);">
+            <div style="position: relative; width: 100%; height: 210px; background: #0f172a; display: flex; align-items: center; justify-content: center; overflow: hidden;">
+              <img id="idVisualPreviewImg" src="" alt="Uploaded ID Preview" style="width: 100%; height: 100%; object-fit: contain; display: block;">
+              <button type="button" class="btn-remove-file" id="btnRemoveIdFile" onclick="removeIdFile(event)" title="Change or Remove ID" style="position: absolute; top: 10px; right: 10px; background: rgba(15, 23, 42, 0.75); color: #ffffff; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; cursor: pointer; border: 1.5px solid rgba(255, 255, 255, 0.3); backdrop-filter: blur(4px);">✕</button>
             </div>
-            <input type="file" id="idFileInput" name="id_photo" accept="image/jpeg,image/png,image/webp" style="display: none;" required>
-
-            <!-- Visual ID Image Preview Card (Immediate confirmation before clicking Next) -->
-            <div id="idImagePreviewCard" style="display: none; margin-top: 14px; border-radius: var(--radius-lg); overflow: hidden; background: #0f172a; box-shadow: var(--clay-sunken-shadow); border: 1.5px solid rgba(203, 213, 225, 0.8);">
-              <div style="position: relative; width: 100%; height: 210px; background: #0f172a; display: flex; align-items: center; justify-content: center; overflow: hidden;">
-                <!-- Visual ID image preview -->
-                <img id="idVisualPreviewImg" src="" alt="Uploaded ID Preview" style="width: 100%; height: 100%; object-fit: contain; display: block;">
-                <!-- Remove / Change ID Button -->
-                <button type="button" class="btn-remove-file" id="btnRemoveIdFile" onclick="removeIdFile(event)" title="Change or Remove ID" style="position: absolute; top: 10px; right: 10px; background: rgba(15, 23, 42, 0.75); color: #ffffff; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; cursor: pointer; border: 1.5px solid rgba(255, 255, 255, 0.3); backdrop-filter: blur(4px);">✕</button>
-              </div>
-              <!-- File Info Bar -->
-              <div style="padding: 10px 14px; background: var(--clay-surface); display: flex; align-items: center; justify-content: space-between; gap: 10px; border-top: 1px solid rgba(226, 232, 240, 0.8);">
-                <div style="display: flex; align-items: center; gap: 8px; overflow: hidden;">
-                  <span style="font-size: 18px;">🪪</span>
-                  <div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                    <div id="idPreviewFileName" style="font-size: 12.5px; font-weight: 700; color: #0f172a; overflow: hidden; text-overflow: ellipsis;"></div>
-                    <div id="idPreviewFileSize" style="font-size: 11px; color: var(--text-muted);"></div>
-                  </div>
+            <div style="padding: 10px 14px; background: var(--clay-surface); display: flex; align-items: center; justify-content: space-between; gap: 10px; border-top: 1px solid rgba(226, 232, 240, 0.8);">
+              <div style="display: flex; align-items: center; gap: 8px; overflow: hidden;">
+                <span style="font-size: 18px;">🪪</span>
+                <div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                  <div id="idPreviewFileName" style="font-size: 12.5px; font-weight: 700; color: #0f172a; overflow: hidden; text-overflow: ellipsis;"></div>
+                  <div id="idPreviewFileSize" style="font-size: 11px; color: var(--text-muted);"></div>
                 </div>
-                <span class="clay-badge badge-low" style="font-size: 11px; padding: 4px 10px; font-weight: 700;">✓ ID Attached</span>
               </div>
+              <span class="clay-badge badge-low" style="font-size: 11px; padding: 4px 10px; font-weight: 700;">✓ ID Attached</span>
             </div>
-          </div>
-
-          <div style="display: flex; gap: 12px; margin-top: 24px;">
-            <button type="button" class="clay-btn clay-btn-secondary" style="flex: 1;" onclick="closeVerifyAccountModal()">Cancel</button>
-            <button type="button" class="clay-btn clay-btn-primary" style="flex: 2;" id="btnNextStep1" onclick="goToVerificationStep(2)">
-              <span>Next: Live Testing →</span>
-            </button>
           </div>
         </div>
 
-        <!-- ================= STEP 2: DEDICATED LIVE TESTING & AUTO-CAPTURE ================= -->
-        <div id="verifyStep2View" style="display: none;">
-          <div style="text-align: center; margin-bottom: 12px;">
-            <h3 style="font-size: 15px; font-weight: 800; color: #0f172a; margin: 0 0 4px 0;">Step 2: Dedicated Live Testing</h3>
-            <p style="font-size: 12px; color: var(--text-muted); margin: 0;">Perform the physical action to verify liveness and automatically capture your face photo.</p>
-          </div>
-
-          <!-- Active Movement Instruction Banner -->
-          <div id="livenessInstructionBanner" style="margin-bottom: 14px; padding: 12px 16px; border-radius: var(--radius-lg); background: #f0fdf4; border: 1.5px solid #86efac; display: flex; align-items: center; gap: 12px; box-shadow: var(--clay-button-shadow);">
-            <div style="width: 36px; height: 36px; border-radius: 10px; background: #dcfce7; color: #16a34a; display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 800; flex-shrink: 0;">
-              👀
-            </div>
-            <div>
-              <div style="font-size: 11px; font-weight: 800; color: #15803d; text-transform: uppercase; letter-spacing: 0.5px;">Instruction</div>
-              <div id="livenessChallengeText" style="font-size: 14px; font-weight: 800; color: #166534;">
-                Blink your eyes or Move your head to the left or right
-              </div>
-            </div>
-          </div>
-
-          <!-- Live Webcam Feed for Pure Landmark Motion Analysis & Auto-Capture -->
-          <div style="position: relative; width: 100%; max-width: 380px; height: 260px; margin: 0 auto; border-radius: 18px; overflow: hidden; background: #0f172a; box-shadow: var(--clay-sunken-shadow); display: flex; align-items: center; justify-content: center;">
-            <video id="livenessVideo" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); -webkit-transform: scaleX(-1);"></video>
-
-            <!-- Hidden canvas to grab auto-capture snapshot -->
-            <canvas id="livenessCaptureCanvas" style="display: none;"></canvas>
-
-            <!-- Guide oval cutout -->
-            <div class="gcash-camera-mask face-oval-guide">
-              <div id="livenessOvalRing" class="face-oval-ring"></div>
-            </div>
-
-            <!-- Dynamic Status Pill -->
-            <div id="livenessStatusPill" class="face-status-pill">
-              <span id="livenessStatusIcon">👀</span>
-              <span id="livenessStatusText">Blink your eyes or move your head</span>
-            </div>
-
-            <!-- Loading overlay when finalizing -->
-            <div id="livenessFinalizingOverlay" style="display: none; position: absolute; inset: 0; background: rgba(15, 23, 42, 0.92); z-index: 25; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: white; padding: 20px; text-align: center;">
-              <div style="font-size: 34px;">✨</div>
-              <div style="font-size: 15px; font-weight: 800; color: #34d399;" id="livenessFinalizingTitle">Action Confirmed!</div>
-              <div style="font-size: 12.5px; color: #94a3b8;" id="livenessFinalizingSub">Comparing face with your ID...</div>
-            </div>
-          </div>
-
-          <!-- Subtext notice -->
-          <div style="text-align: center; margin-top: 14px;">
-            <div style="font-size: 12px; font-weight: 700; color: #64748b;" id="livenessSubNotice">
-              Tracking physical movement in real-time. Automated detection will complete your verification.
-            </div>
-          </div>
-
-          <!-- Navigation Buttons: Back button directly to Step 1 -->
-          <div style="display: flex; gap: 12px; margin-top: 20px;">
-            <button type="button" class="clay-btn clay-btn-secondary" style="width: 100%;" id="btnBackToStep1" onclick="goToVerificationStep(1)">
-              <span>← Back to ID</span>
-            </button>
-          </div>
+        <div style="display: flex; gap: 12px; margin-top: 24px;">
+          <button type="button" class="clay-btn clay-btn-secondary" style="flex: 1;" onclick="closeVerifyAccountModal()">Cancel</button>
+          <button type="submit" class="clay-btn clay-btn-primary" style="flex: 2;" id="btnSubmitVerification">
+            <span>Submit ID for Verification</span>
+          </button>
         </div>
       </form>
     </div>
@@ -1454,6 +1353,31 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
         toastTimeout = setTimeout(() => {
           t.classList.remove('show');
         }, duration);
+      }
+    }
+
+    function handleTargetBillChange() {
+      const sel = document.getElementById('payTargetPayment');
+      if (!sel) return;
+      const opt = sel.options[sel.selectedIndex];
+      if (!opt) return;
+      const amt = opt.dataset.amount || '3000.00';
+      const cycle = opt.dataset.cycle;
+      const payAmountEl = document.getElementById('payAmount');
+      const payCycleEl = document.getElementById('payCycle');
+      if (payAmountEl) payAmountEl.value = amt;
+      if (payCycleEl && cycle) payCycleEl.value = cycle;
+    }
+
+    function selectBillToPay(id) {
+      const sel = document.getElementById('payTargetPayment');
+      if (sel) {
+        sel.value = id;
+        handleTargetBillChange();
+      }
+      const dropZone = document.getElementById('receiptDropZone');
+      if (dropZone) {
+        dropZone.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
     }
 
@@ -1627,53 +1551,7 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
           });
         }
 
-        // 2. Settings & Privacy Button inside Dropdown
-        const settingsToggleBtn = document.getElementById('settingsToggleBtn');
-        if (settingsToggleBtn) {
-          settingsToggleBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            openProfileView('accountInfo');
-          });
-        }
-
-        // Header Profile and Avatar Badges as Menu Triggers
-        const headerProfileTrigger = document.getElementById('headerProfileTrigger');
-        if (headerProfileTrigger) {
-          headerProfileTrigger.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            toggleSettingsMenu(e);
-          });
-        }
-
-        const headerAvatarBadge = document.getElementById('headerAvatarBadge');
-        if (headerAvatarBadge) {
-          headerAvatarBadge.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            toggleSettingsMenu(e);
-          });
-        }
-
-        // Prevent clicks inside the dropdown from closing it prematurely
-        const settingsDropdown = document.getElementById('settingsDropdown');
-        if (settingsDropdown) {
-          settingsDropdown.addEventListener('click', (e) => {
-            e.stopPropagation();
-          });
-        }
-
-        // 3. Settings Dropdown Items
-        const profileBtn = document.querySelector('.settings-dropdown-item:not(.settings-item-danger)');
-        if (profileBtn) {
-          profileBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            openProfileView('accountInfo');
-          });
-        }
-
-        // 4. Sidebar Mobile Overlay
+        // 2. Sidebar Mobile Overlay
         const overlay = document.querySelector('.sidebar-overlay');
         if (overlay) {
           overlay.addEventListener('click', (e) => {
@@ -1682,18 +1560,17 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
           });
         }
 
-        // 5. Sidebar Navigation Menu Items
+        // 3. Sidebar Navigation Menu Items
         document.querySelectorAll('.sidebar-nav-item').forEach(item => {
           item.addEventListener('click', function(e) {
             closeSettingsMenu();
           });
         });
 
-        // 6. Global outside click handler to dismiss settings dropdown
+        // 4. Global outside click handler to dismiss settings dropdown
         document.addEventListener('click', (e) => {
           if (!e.target.closest('#settingsToggleBtn') && 
               !e.target.closest('#settingsDropdown') && 
-              !e.target.closest('#headerProfileTrigger') && 
               !e.target.closest('#headerAvatarBadge') &&
               !e.target.closest('#headerNotificationBtn') &&
               !e.target.closest('#notificationDropdown')) {
@@ -2844,8 +2721,184 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
       showToast('Receipt attached: ' + file.name, 'info');
     }
 
+    function escapeHtml(str) {
+      if (str === null || str === undefined) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function openTenantTicketModal(tk) {
+      if (!tk) return;
+      const modal = document.getElementById('tenantTicketModal');
+      if (!modal) return;
+      document.getElementById('ttModalIdBadge').textContent = '#MT-' + String(tk.id).padStart(4, '0');
+      document.getElementById('ttModalTitle').textContent = tk.title || 'Maintenance Request';
+      
+      const catEl = document.getElementById('ttModalCategory');
+      if (catEl) {
+        catEl.textContent = tk.category || 'General';
+        catEl.className = 'clay-badge badge-' + String(tk.category || 'general').toLowerCase();
+      }
+
+      const prioEl = document.getElementById('ttModalPriority');
+      if (prioEl) {
+        prioEl.textContent = String(tk.priority || 'medium').toUpperCase();
+        prioEl.className = 'clay-badge badge-' + String(tk.priority || 'medium').toLowerCase();
+      }
+
+      const statusEl = document.getElementById('ttModalStatus');
+      if (statusEl) {
+        statusEl.textContent = String(tk.status || 'open').toUpperCase();
+        statusEl.className = 'clay-badge badge-' + String(tk.status || 'open').toLowerCase();
+      }
+
+      const unitEl = document.getElementById('ttModalUnit');
+      if (unitEl) unitEl.textContent = '<?= htmlspecialchars($unit['unit_number']) ?>';
+
+      document.getElementById('ttModalDesc').textContent = tk.description || 'No description provided.';
+
+      // Photos container
+      const photosSec = document.getElementById('ttModalPhotosSection');
+      const photosCont = document.getElementById('ttModalPhotosContainer');
+      if (photosSec && photosCont) {
+        photosCont.innerHTML = '';
+        if (tk.photo_path && tk.photo_path.trim() !== '') {
+          const pList = tk.photo_path.split(',');
+          pList.forEach((pItem, idx) => {
+            pItem = pItem.trim();
+            if (!pItem) return;
+            const a = document.createElement('a');
+            a.href = pItem;
+            a.target = '_blank';
+            a.className = 'btn-inspect-proof';
+            a.style.cssText = 'display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; font-size: 12px; border-radius: 8px; text-decoration: none;';
+            a.innerHTML = '📷 View Attached Photo ' + (pList.length > 1 ? (idx + 1) : '');
+            photosCont.appendChild(a);
+          });
+          photosSec.style.display = 'block';
+        } else {
+          photosSec.style.display = 'none';
+        }
+      }
+
+      // Owner Response / Remarks
+      const respBox = document.getElementById('ttModalOwnerResponseBox');
+      const respText = document.getElementById('ttModalOwnerResponseText');
+      if (tk.resolution_notes && tk.resolution_notes.trim() !== '') {
+        respText.textContent = tk.resolution_notes;
+        respBox.style.background = '#f0fdf4';
+        respBox.style.borderColor = '#bbf7d0';
+        respBox.style.color = '#166534';
+      } else {
+        respText.textContent = 'Awaiting response from property owner. Any updates or instructions will appear here.';
+        respBox.style.background = '#f8fafc';
+        respBox.style.borderColor = '#e2e8f0';
+        respBox.style.color = '#64748b';
+      }
+
+      // Dates
+      let dateSub = '-';
+      if (tk.created_at) {
+        dateSub = new Date(tk.created_at.replace(' ', 'T')).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      }
+      document.getElementById('ttModalDateSubmitted').textContent = dateSub;
+
+      let dateRes = 'In progress / Pending';
+      if (tk.resolved_at) {
+        dateRes = new Date(tk.resolved_at.replace(' ', 'T')).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      }
+      document.getElementById('ttModalDateResolved').textContent = dateRes;
+
+      modal.style.display = 'flex';
+      modal.style.pointerEvents = 'auto';
+      modal.classList.add('open');
+    }
+
+    function closeTenantTicketModal() {
+      const modal = document.getElementById('tenantTicketModal');
+      if (modal) {
+        modal.classList.remove('open');
+        modal.style.display = 'none';
+        modal.style.pointerEvents = 'none';
+      }
+    }
+
+    async function loadTenantTickets() {
+      try {
+        const res = await fetch('api/ticket_api.php');
+        const data = await res.json();
+        if (data.status === 'success' && Array.isArray(data.tickets)) {
+          const cont = document.getElementById('ticketHistoryContainer');
+          if (!cont) return;
+          if (data.tickets.length === 0) {
+            cont.innerHTML = '<p style="font-size: 13px; color: var(--text-muted); text-align: center; padding: 20px;" id="noTicketsMsg">No tickets logged yet.</p>';
+            return;
+          }
+          cont.innerHTML = '';
+          data.tickets.forEach(tk => {
+            const item = document.createElement('div');
+            item.className = 'ticket-item clickable-ticket-item';
+            item.style.cssText = 'cursor: pointer; transition: transform 0.15s ease, box-shadow 0.15s ease;';
+            item.title = 'Click to view complete ticket details and owner response';
+            item.onclick = () => openTenantTicketModal(tk);
+            
+            let photoHtml = '';
+            if (tk.photo_path && tk.photo_path.trim() !== '') {
+              photoHtml = '<span class="clay-badge badge-low" style="font-size: 10px;">📷 Photos attached</span>';
+            }
+
+            let respHtml = '';
+            if (tk.resolution_notes && tk.resolution_notes.trim() !== '') {
+              const shortNotes = tk.resolution_notes.length > 45 ? tk.resolution_notes.substring(0, 45) + '...' : tk.resolution_notes;
+              respHtml = `<div style="font-size: 12px; color: #047857; margin-top: 6px; font-weight: 600; display: flex; align-items: center; gap: 5px;"><span>💬</span><span>Owner responded: ${escapeHtml(shortNotes)}</span></div>`;
+            }
+
+            const dateStr = tk.created_at ? new Date(tk.created_at.replace(' ', 'T')).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+
+            item.innerHTML = `
+              <div>
+                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+                  <span class="clay-badge" style="background: #e0e7ff; color: #4338ca; font-weight: 800; font-size: 11px;">#MT-${String(tk.id).padStart(4, '0')}</span>
+                  <h4 style="font-size: 15px; font-weight: 700; color: #1e293b; margin: 0;">${escapeHtml(tk.title)}</h4>
+                </div>
+                <div class="ticket-meta">
+                  <span class="clay-badge badge-${escapeHtml(String(tk.category || 'general').toLowerCase())}">${escapeHtml(tk.category || 'General')}</span>
+                  <span class="clay-badge badge-${escapeHtml(String(tk.priority || 'medium').toLowerCase())}">${escapeHtml(String(tk.priority || 'medium').toUpperCase())}</span>
+                  <span class="ticket-date">${dateStr}</span>
+                  ${photoHtml}
+                </div>
+                ${respHtml}
+              </div>
+              <span class="clay-badge badge-${escapeHtml(String(tk.status || 'open').toLowerCase())}">${escapeHtml(String(tk.status || 'open').toUpperCase())}</span>
+            `;
+            cont.appendChild(item);
+          });
+        }
+      } catch (e) {
+        console.warn('Failed to refresh tenant tickets:', e);
+      }
+    }
+
     // Comprehensive Event Listener Initialization (Guarded against blocking errors)
     function initTenantEventListeners() {
+      // 0. Tenant Ticket Details Modal Backdrop Click-to-Close
+      try {
+        const ticketModal = document.getElementById('tenantTicketModal');
+        if (ticketModal) {
+          ticketModal.addEventListener('click', (e) => {
+            if (e.target === ticketModal) {
+              closeTenantTicketModal();
+            }
+          });
+        }
+      } catch (e) {
+        console.warn('Ticket modal backdrop notice:', e);
+      }
+
       // 1. Verify Account Modal Backdrop Click-to-Close
       try {
         const modal = document.getElementById('verifyAccountModal');
@@ -3129,10 +3182,12 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
                   photoPreview.innerHTML = '';
                   photoPreview.style.display = 'none';
                 }
-                // Contextual Page Routing: Explicit Exception - Automatically redirect away from submission form straight back to Tenant Dashboard
-                setTimeout(() => {
-                  window.location.href = 'tenant_portal.php?section=tenantOverview';
-                }, 800);
+                const uploadLabel = document.getElementById('ticketPhotosUploadLabel');
+                if (uploadLabel) {
+                  uploadLabel.textContent = 'Attach Photos of Item';
+                }
+                // Remain on Maintenance section: dynamically update tickets list so new ticket is instantly visible
+                loadTenantTickets();
               } else {
                 showToast(result.message || 'Error logging ticket', 'error');
               }
@@ -3158,8 +3213,14 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
         const btnRemoveFile = document.getElementById('btnRemoveFile');
         const btnUploadReceipt = document.getElementById('btnUploadReceipt');
 
+        const isRentPendingSetup = <?= ($currentPayment && $currentPayment['status'] === 'pending_setup') ? 'true' : 'false' ?>;
+
         if (dropZone && fileInput) {
           dropZone.addEventListener('click', (e) => {
+            if (isRentPendingSetup) {
+              showToast('Your rent details are being configured by the Owner. Payment submission is disabled at this time.', 'error');
+              return;
+            }
             if (e.target !== btnRemoveFile) fileInput.click();
           });
 
@@ -3171,6 +3232,10 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
           ['dragleave', 'drop'].forEach(n => dropZone.addEventListener(n, (e) => {
             e.preventDefault();
             dropZone.classList.remove('drag-over');
+            if (n === 'drop' && isRentPendingSetup) {
+              showToast('Your rent details are being configured by the Owner. Payment submission is disabled at this time.', 'error');
+              return;
+            }
           }));
 
           dropZone.addEventListener('drop', (e) => {
@@ -3214,8 +3279,15 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
 
             const payCycleEl = document.getElementById('payCycle');
             const payAmountEl = document.getElementById('payAmount');
+            const payTargetEl = document.getElementById('payTargetPayment');
+            const targetOpt = payTargetEl ? payTargetEl.options[payTargetEl.selectedIndex] : null;
+            const targetPayId = payTargetEl ? payTargetEl.value : '0';
+            const targetPayType = targetOpt && targetOpt.dataset.type ? targetOpt.dataset.type : 'Rent';
+
             const formData = new FormData();
             formData.append('receipt', attachedFile);
+            formData.append('payment_id', targetPayId);
+            formData.append('payment_type', targetPayType);
             formData.append('billing_cycle', payCycleEl ? payCycleEl.value : '2026-10-01');
             formData.append('amount_paid', payAmountEl ? payAmountEl.value : '0');
 
@@ -3224,10 +3296,18 @@ $currentPayment = !empty($myPayments) ? $myPayments[0] : null;
               const result = await res.json();
               if (res.ok && result.status === 'success') {
                 showToast(result.message);
-                // Contextual Page Routing: Explicit Exception - Automatically redirect away from submission form straight back to Tenant Dashboard
+                // Reset drop zone state and stay on payments section without redirecting to overview
+                attachedFile = null;
+                if (fileInput) fileInput.value = '';
+                if (previewCard) previewCard.style.display = 'none';
+                if (progressWrapper) progressWrapper.style.display = 'none';
+                btnUploadReceipt.disabled = false;
+                btnUploadReceipt.innerHTML = '<span>📤 Submit Rent Payment Proof</span>';
+                
+                // Refresh within payments section so tenant sees their newly uploaded receipt
                 setTimeout(() => {
-                  window.location.href = 'tenant_portal.php?section=tenantOverview';
-                }, 1000);
+                  window.location.href = 'tenant_portal.php?section=tenantPayments';
+                }, 900);
               } else {
                 showToast(result.message || 'Error uploading receipt', 'error');
                 btnUploadReceipt.disabled = false;

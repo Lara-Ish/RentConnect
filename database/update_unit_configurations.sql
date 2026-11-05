@@ -11,9 +11,9 @@ USE `rentconnect`;
 -- Ensure exactly 3 units exist with strict layout and pricing
 INSERT INTO `units` (`id`, `unit_number`, `floor_level`, `bedrooms`, `bathrooms`, `monthly_rent`)
 VALUES
-    (1, 'Unit 1', 1, 1, 1.0, 6000.00),
-    (2, 'Unit 2', 1, 2, 1.0, 8000.00),
-    (3, 'Unit 3', 2, 3, 1.0, 8000.00)
+    (1, 'Unit 1', 1, 1, 1.0, 3000.00),
+    (2, 'Unit 2', 1, 2, 1.0, 3000.00),
+    (3, 'Unit 3', 2, 3, 1.0, 3000.00)
 ON DUPLICATE KEY UPDATE
     `unit_number`  = VALUES(`unit_number`),
     `floor_level`  = VALUES(`floor_level`),

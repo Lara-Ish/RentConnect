@@ -60,7 +60,7 @@ try {
             }
 
             // Check if payment exists
-            $check = $pdo->prepare("SELECT id, tenant_id, billing_cycle, amount_due, amount_paid, receipt_filename FROM payments WHERE id = :id LIMIT 1");
+            $check = $pdo->prepare("SELECT id, tenant_id, payment_type, billing_cycle, due_date, amount_due, amount_paid, receipt_filename, status, verification_notes, verified_at FROM payments WHERE id = :id LIMIT 1");
             $check->execute([':id' => $paymentId]);
             $payment = $check->fetch();
 
@@ -76,12 +76,35 @@ try {
             $defaultNotes = $isApproved ? 'Payment receipt approved & verified.' : 'Payment proof rejected.';
             $finalNotes = !empty($notes) ? $notes : $defaultNotes;
 
+            // Anti-duplicate protection: If already processed with same status and notes, return without re-dispatching emails
+            if ($payment['status'] === $statusVal && !empty($payment['verified_at']) && $payment['verification_notes'] === $finalNotes) {
+                echo json_encode([
+                    'status' => 'success',
+                    'message' => "Payment is already marked as {$statusVal}.",
+                    'payment' => [
+                        'id' => $paymentId,
+                        'status' => $statusVal,
+                        'verified_by_landlord' => $verifiedFlag,
+                        'verification_notes' => $finalNotes
+                    ]
+                ]);
+                exit;
+            }
+
+            // When approved, ensure paid amount is updated to amount_due so remaining balance becomes 0.00
+            $updatePaidSql = "";
+            if ($isApproved) {
+                $updatePaidSql = ", amount_paid = CASE WHEN amount_paid <= 0 THEN COALESCE(amount_due, 3000.00) ELSE amount_paid END";
+            }
+
             $stmt = $pdo->prepare("
                 UPDATE payments 
                 SET status = :status,
                     verified_by_landlord = :v,
                     verification_notes = :notes,
-                    verified_at = NOW()
+                    verified_at = NOW(),
+                    payment_date = COALESCE(payment_date, CURDATE())
+                    {$updatePaidSql}
                 WHERE id = :id
             ");
             $stmt->execute([
@@ -93,18 +116,20 @@ try {
 
             // Notify Tenant of review outcome
             if (!empty($payment['tenant_id'])) {
-                $monthStr = date('F Y', strtotime($payment['billing_cycle']));
-                $notifTitle = $isApproved ? 'Payment Proof Verified' : 'Payment Proof Rejected';
+                $payType = $payment['payment_type'] ?? 'Rent';
+                $monthStr = !empty($payment['billing_cycle']) ? date('F Y', strtotime($payment['billing_cycle'])) : 'account creation';
+                $obligationLabel = ($payType === 'Advance Deposit') ? 'Advance Deposit' : "Rent ({$monthStr})";
+                $notifTitle = $isApproved ? "{$obligationLabel} Verified" : "{$obligationLabel} Rejected";
                 $notifMsg = $isApproved
-                    ? "Your payment proof for {$monthStr} has been successfully verified and approved."
-                    : "Your payment proof for {$monthStr} was rejected. Note: {$finalNotes}. Please review and re-submit.";
+                    ? "Your payment proof for {$obligationLabel} has been successfully verified and approved."
+                    : "Your payment proof for {$obligationLabel} was rejected. Reason: {$finalNotes}. Please review and re-submit.";
                 NotificationService::notifyTenant(
                     $pdo,
                     (int)$payment['tenant_id'],
                     'payment',
                     $notifTitle,
                     $notifMsg,
-                    'tenantProfile',
+                    'tenantPayments',
                     $paymentId,
                     $isApproved ? 'payment_approved' : 'payment_rejected'
                 );
@@ -132,9 +157,12 @@ try {
         if ($action === 'upload_receipt') {
             $tenantUser = Auth::user();
             $tenantId = $tenantUser ? (int)$tenantUser['id'] : 2;
-            $amountPaid = (float)($_POST['amount_paid'] ?? 15000.00);
+
+            $targetPaymentId = (int)($_POST['payment_id'] ?? 0);
+            $paymentTypeInput = trim((string)($_POST['payment_type'] ?? ''));
+            $amountPaid = (float)($_POST['amount_paid'] ?? 3000.00);
             $billingCycle = trim((string)($_POST['billing_cycle'] ?? date('Y-m-01')));
-            $paymentMethod = trim((string)($_POST['payment_method'] ?? 'Bank Transfer'));
+            $paymentMethod = trim((string)($_POST['payment_method'] ?? 'GCash / Bank Transfer'));
 
             $savedFilename = null;
 
@@ -171,12 +199,38 @@ try {
                 $savedFilename = $safeName;
             }
 
-            // Check if record exists for this billing cycle and tenant
-            $checkStmt = $pdo->prepare("SELECT id, amount_due, amount_paid FROM payments WHERE billing_cycle = :cycle AND tenant_id = :tid LIMIT 1");
-            $checkStmt->execute([':cycle' => $billingCycle, ':tid' => $tenantId]);
-            $existing = $checkStmt->fetch();
+            // Identify specific payment obligation: by ID, payment type, or billing cycle
+            $existing = null;
+            if ($targetPaymentId > 0) {
+                $checkStmt = $pdo->prepare("SELECT * FROM payments WHERE id = :id AND tenant_id = :tid LIMIT 1");
+                $checkStmt->execute([':id' => $targetPaymentId, ':tid' => $tenantId]);
+                $existing = $checkStmt->fetch();
+            } elseif (!empty($paymentTypeInput)) {
+                $checkStmt = $pdo->prepare("SELECT * FROM payments WHERE tenant_id = :tid AND payment_type = :ptype AND status IN ('unpaid', 'rejected', 'overdue', 'pending') ORDER BY id DESC LIMIT 1");
+                $checkStmt->execute([':tid' => $tenantId, ':ptype' => $paymentTypeInput]);
+                $existing = $checkStmt->fetch();
+            } else {
+                $checkStmt = $pdo->prepare("
+                    SELECT * 
+                    FROM payments 
+                    WHERE tenant_id = :tid 
+                      AND (billing_cycle = :cycle OR status IN ('unpaid', 'rejected', 'overdue')) 
+                    ORDER BY id DESC LIMIT 1
+                ");
+                $checkStmt->execute([':cycle' => $billingCycle, ':tid' => $tenantId]);
+                $existing = $checkStmt->fetch();
+            }
 
             if ($existing) {
+                if ($existing['status'] === 'pending_setup') {
+                    http_response_code(422);
+                    echo json_encode([
+                        'status' => 'error',
+                        'message' => 'Your rent details are being configured by the Owner. Payment submission is disabled until rent configuration is completed.'
+                    ]);
+                    exit;
+                }
+
                 // When uploading or re-uploading receipt, set status to pending review
                 $updateStmt = $pdo->prepare("
                     UPDATE payments 
@@ -185,6 +239,7 @@ try {
                         status = 'pending',
                         receipt_filename = COALESCE(:receipt, receipt_filename),
                         payment_method = :method,
+                        billing_cycle = COALESCE(billing_cycle, :cycle),
                         verified_by_landlord = 0,
                         verification_notes = NULL,
                         verified_at = NULL
@@ -194,25 +249,29 @@ try {
                     ':paid' => $amountPaid,
                     ':receipt' => $savedFilename,
                     ':method' => $paymentMethod,
+                    ':cycle' => $billingCycle,
                     ':id' => $existing['id']
                 ]);
                 $paymentId = (int)$existing['id'];
+                $paymentType = $existing['payment_type'] ?? 'Rent';
             } else {
+                $paymentType = !empty($paymentTypeInput) ? $paymentTypeInput : 'Rent';
                 $unitId = $tenantUser && isset($tenantUser['unit_id']) ? (int)$tenantUser['unit_id'] : 1;
                 $unitRentStmt = $pdo->prepare("SELECT monthly_rent FROM units WHERE id = :uid LIMIT 1");
                 $unitRentStmt->execute([':uid' => $unitId]);
                 $unitRow = $unitRentStmt->fetch();
-                $amountDue = $unitRow ? (float)$unitRow['monthly_rent'] : 6000.00;
+                $amountDue = $unitRow ? (float)$unitRow['monthly_rent'] : 3000.00;
 
                 $insertStmt = $pdo->prepare("
                     INSERT INTO payments 
-                        (tenant_id, unit_id, billing_cycle, due_date, amount_due, amount_paid, payment_date, status, payment_method, receipt_filename, verified_by_landlord, created_at)
+                        (tenant_id, unit_id, payment_type, billing_cycle, due_date, amount_due, amount_paid, payment_date, status, payment_method, receipt_filename, verified_by_landlord, created_at)
                     VALUES 
-                        (:tenant_id, :unit_id, :cycle, :due_date, :due, :paid, CURDATE(), 'pending', :method, :receipt, 0, NOW())
+                        (:tenant_id, :unit_id, :ptype, :cycle, :due_date, :due, :paid, CURDATE(), 'pending', :method, :receipt, 0, NOW())
                 ");
                 $insertStmt->execute([
                     ':tenant_id' => $tenantId,
                     ':unit_id' => $unitId,
+                    ':ptype' => $paymentType,
                     ':cycle' => $billingCycle,
                     ':due_date' => date('Y-m-05', strtotime($billingCycle)),
                     ':due' => $amountDue,
@@ -226,12 +285,23 @@ try {
             // Notify Landlords of submitted payment proof
             $tenantName = $tenantUser['name'] ?? 'Tenant';
             $cycleMonth = date('F Y', strtotime($billingCycle));
+            $notifObligation = ($paymentType === 'Advance Deposit') ? 'Advance Deposit' : "Rent ({$cycleMonth})";
             NotificationService::notifyLandlords(
                 $pdo,
                 'payment',
                 'Payment Proof Submitted',
-                "{$tenantName} submitted payment proof for {$cycleMonth}. Payment verification is required.",
+                "{$tenantName} submitted payment proof for {$notifObligation}. Payment verification is required.",
                 'sectionPayments',
+                $paymentId,
+                'payment_submitted'
+            );
+            NotificationService::notifyTenant(
+                $pdo,
+                $tenantId,
+                'payment',
+                'Payment Proof Submitted',
+                "Your payment proof for {$notifObligation} has been submitted and is pending verification.",
+                'tenantPayments',
                 $paymentId,
                 'payment_pending'
             );
@@ -250,19 +320,195 @@ try {
             exit;
         }
 
+        // ---------------------------------------------------------------------
+        // 3. Admin / Landlord: Configure Placeholder Rent Record
+        // ---------------------------------------------------------------------
+        if ($action === 'configure_rent') {
+            if (!Auth::isLandlord()) {
+                http_response_code(403);
+                echo json_encode([
+                    'status' => 'error',
+                    'message' => 'Unauthorized: Only the landlord can configure rent records.'
+                ]);
+                exit;
+            }
+
+            $paymentId = (int)($input['payment_id'] ?? 0);
+            $rentAmount = isset($input['monthly_rent']) ? (float)$input['monthly_rent'] : (isset($input['amount_due']) ? (float)$input['amount_due'] : 0.0);
+            $billingCycleInput = trim((string)($input['billing_cycle'] ?? ''));
+            $dueDateInput = trim((string)($input['due_date'] ?? ''));
+
+            if ($paymentId <= 0) {
+                http_response_code(422);
+                echo json_encode(['status' => 'error', 'message' => 'Invalid payment ID.']);
+                exit;
+            }
+
+            if ($rentAmount <= 0) {
+                http_response_code(422);
+                echo json_encode(['status' => 'error', 'message' => 'Please provide a valid monthly rent amount greater than 0.']);
+                exit;
+            }
+
+            // Format billing cycle (must be valid YYYY-MM or YYYY-MM-DD, normalize to YYYY-MM-01)
+            if (empty($billingCycleInput)) {
+                http_response_code(422);
+                echo json_encode(['status' => 'error', 'message' => 'Billing period / rental month is required.']);
+                exit;
+            }
+            if (preg_match('/^\d{4}-\d{2}$/', $billingCycleInput)) {
+                $billingCycle = $billingCycleInput . '-01';
+            } else {
+                $timestamp = strtotime($billingCycleInput);
+                if (!$timestamp) {
+                    http_response_code(422);
+                    echo json_encode(['status' => 'error', 'message' => 'Invalid billing period format.']);
+                    exit;
+                }
+                $billingCycle = date('Y-m-01', $timestamp);
+            }
+
+            // Format due date (defaults to 5th of the billing cycle month if not provided or empty)
+            if (empty($dueDateInput)) {
+                $dueDate = date('Y-m-05', strtotime($billingCycle));
+            } else {
+                $dueTimestamp = strtotime($dueDateInput);
+                if (!$dueTimestamp) {
+                    http_response_code(422);
+                    echo json_encode(['status' => 'error', 'message' => 'Invalid due date format.']);
+                    exit;
+                }
+                $dueDate = date('Y-m-d', $dueTimestamp);
+            }
+
+            // Check if payment record exists
+            $checkStmt = $pdo->prepare("
+                SELECT p.*, u.name AS tenant_name, un.unit_number 
+                FROM payments p
+                JOIN users u ON p.tenant_id = u.id
+                JOIN units un ON p.unit_id = un.id
+                WHERE p.id = :id LIMIT 1
+            ");
+            $checkStmt->execute([':id' => $paymentId]);
+            $payment = $checkStmt->fetch();
+
+            if (!$payment) {
+                http_response_code(404);
+                echo json_encode(['status' => 'error', 'message' => 'Rent payment record not found.']);
+                exit;
+            }
+
+            // Prevent duplicate active rent records for the same tenant and billing cycle
+            $dupStmt = $pdo->prepare("
+                SELECT id FROM payments 
+                WHERE tenant_id = :tid AND billing_cycle = :cycle AND id != :id AND payment_type = 'Rent'
+                LIMIT 1
+            ");
+            $dupStmt->execute([
+                ':tid' => $payment['tenant_id'],
+                ':cycle' => $billingCycle,
+                ':id' => $paymentId
+            ]);
+            if ($dupStmt->fetch()) {
+                http_response_code(409);
+                echo json_encode([
+                    'status' => 'error',
+                    'message' => "A rent record already exists for tenant '{$payment['tenant_name']}' for " . date('F Y', strtotime($billingCycle)) . "."
+                ]);
+                exit;
+            }
+
+            // Update placeholder into an active rental record:
+            // - status becomes 'unpaid' (awaiting tenant payment submission)
+            // - amount_due is set
+            // - billing_cycle and due_date are set
+            // - amount_paid remains 0.00 (not treated as actual payment until tenant pays)
+            // - verified_by_landlord remains 0
+            // - payment_date remains NULL
+            // - receipt_filename remains NULL
+            $updStmt = $pdo->prepare("
+                UPDATE payments 
+                SET payment_type = 'Rent',
+                    amount_due = :due,
+                    billing_cycle = :cycle,
+                    due_date = :due_date,
+                    status = 'unpaid',
+                    verification_notes = 'Rent configured by Landlord. Awaiting tenant payment.'
+                WHERE id = :id
+            ");
+            $updStmt->execute([
+                ':due' => $rentAmount,
+                ':cycle' => $billingCycle,
+                ':due_date' => $dueDate,
+                ':id' => $paymentId
+            ]);
+
+            // Sync unit monthly rent if unit exists
+            if (!empty($payment['unit_id'])) {
+                $pdo->prepare("UPDATE units SET monthly_rent = :rent WHERE id = :uid")
+                    ->execute([':rent' => $rentAmount, ':uid' => $payment['unit_id']]);
+            }
+
+            // Notify Tenant that rent has been configured
+            $monthStr = date('F Y', strtotime($billingCycle));
+            $formattedRent = number_format($rentAmount, 2);
+            $formattedDueDate = date('M d, Y', strtotime($dueDate));
+            NotificationService::notifyTenant(
+                $pdo,
+                (int)$payment['tenant_id'],
+                'payment',
+                'Rent Payment Configured',
+                "Your monthly rent for {$monthStr} has been set to ₱{$formattedRent}, due on {$formattedDueDate}.",
+                'tenantPayments',
+                $paymentId,
+                'rent_configured'
+            );
+
+            echo json_encode([
+                'status' => 'success',
+                'message' => "Rent for {$payment['tenant_name']} ({$payment['unit_number']}) configured successfully! Billing Month: {$monthStr}, Amount: ₱{$formattedRent}.",
+                'payment' => [
+                    'id' => $paymentId,
+                    'tenant_id' => (int)$payment['tenant_id'],
+                    'tenant_name' => $payment['tenant_name'],
+                    'unit_number' => $payment['unit_number'],
+                    'payment_type' => 'Rent',
+                    'amount_due' => $rentAmount,
+                    'amount_paid' => 0.00,
+                    'billing_cycle' => $billingCycle,
+                    'due_date' => $dueDate,
+                    'status' => 'unpaid'
+                ]
+            ]);
+            exit;
+        }
+
         http_response_code(400);
         echo json_encode(['status' => 'error', 'message' => 'Invalid action.']);
         exit;
     }
 
     if ($requestMethod === 'GET') {
-        $stmt = $pdo->query("
-            SELECT p.*, u.name AS tenant_name, u.username AS tenant_username, un.unit_number
-            FROM payments p
-            JOIN users u ON p.tenant_id = u.id
-            JOIN units un ON p.unit_id = un.id
-            ORDER BY p.billing_cycle DESC, p.id DESC
-        ");
+        $currentUser = Auth::user();
+        if (Auth::isTenant() && $currentUser) {
+            $stmt = $pdo->prepare("
+                SELECT p.*, u.name AS tenant_name, u.username AS tenant_username, u.move_in_date, un.unit_number
+                FROM payments p
+                JOIN users u ON p.tenant_id = u.id
+                JOIN units un ON p.unit_id = un.id
+                WHERE p.tenant_id = :tid
+                ORDER BY p.id DESC
+            ");
+            $stmt->execute([':tid' => $currentUser['id']]);
+        } else {
+            $stmt = $pdo->query("
+                SELECT p.*, u.name AS tenant_name, u.username AS tenant_username, u.move_in_date, un.unit_number
+                FROM payments p
+                JOIN users u ON p.tenant_id = u.id
+                JOIN units un ON p.unit_id = un.id
+                ORDER BY p.id DESC
+            ");
+        }
         $payments = $stmt->fetchAll();
 
         echo json_encode([

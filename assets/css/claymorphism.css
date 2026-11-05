@@ -2310,17 +2310,20 @@ svg.w-4, svg.h-4 {
 }
 
 .header-avatar-badge {
-  width: 38px;
-  height: 38px;
-  border-radius: 12px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50% !important;
   background: linear-gradient(135deg, #a5b4fc, #818cf8);
   box-shadow: var(--clay-button-shadow);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 18px;
+  font-size: 16px;
+  font-weight: 800;
   color: #fff;
   flex-shrink: 0;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .header-avatar-badge.tenant-avatar {

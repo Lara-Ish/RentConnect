@@ -20,6 +20,7 @@ class Database {
 
     /**
      * Self-healing schema validation: ensures verification columns exist in users table
+     * and payments table has payment_type and unpaid status
      */
     private static function ensureVerificationColumns(PDO $pdo): void {
         if (self::$schemaChecked) {
@@ -29,6 +30,8 @@ class Database {
         try {
             $pdo->exec("ALTER TABLE `users` ADD COLUMN IF NOT EXISTS `live_photo_filename` VARCHAR(255) NULL AFTER `id_photo_filename`");
             $pdo->exec("ALTER TABLE `users` ADD COLUMN IF NOT EXISTS `verification_notes` TEXT NULL AFTER `id_verified_at`");
+            $pdo->exec("ALTER TABLE `payments` ADD COLUMN IF NOT EXISTS `payment_type` VARCHAR(50) NOT NULL DEFAULT 'Rent' AFTER `unit_id`");
+            $pdo->exec("ALTER TABLE `payments` MODIFY COLUMN `status` ENUM('pending_setup', 'unpaid', 'pending', 'approved', 'rejected', 'overdue') NOT NULL DEFAULT 'pending_setup'");
         } catch (Throwable $e) {
             // Silently ignore if already present or user lacks DDL permissions
         }

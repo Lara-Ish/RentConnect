@@ -25,9 +25,9 @@ UPDATE `apartment_settings` SET `active_tenant_id` = NULL WHERE `id` = 1;
 TRUNCATE TABLE `leases`;
 
 -- 6. Ensure the 3 units strictly have their hardcoded layout and pricing
-UPDATE `units` SET `unit_number` = 'Unit 1', `bedrooms` = 1, `bathrooms` = 1.0, `floor_level` = 1, `monthly_rent` = 6000.00 WHERE `id` = 1;
-UPDATE `units` SET `unit_number` = 'Unit 2', `bedrooms` = 2, `bathrooms` = 1.0, `floor_level` = 1, `monthly_rent` = 8000.00 WHERE `id` = 2;
-UPDATE `units` SET `unit_number` = 'Unit 3', `bedrooms` = 3, `bathrooms` = 1.0, `floor_level` = 2, `monthly_rent` = 8000.00 WHERE `id` = 3;
+UPDATE `units` SET `unit_number` = 'Unit 1', `bedrooms` = 1, `bathrooms` = 1.0, `floor_level` = 1, `monthly_rent` = 3000.00 WHERE `id` = 1;
+UPDATE `units` SET `unit_number` = 'Unit 2', `bedrooms` = 2, `bathrooms` = 1.0, `floor_level` = 1, `monthly_rent` = 3000.00 WHERE `id` = 2;
+UPDATE `units` SET `unit_number` = 'Unit 3', `bedrooms` = 3, `bathrooms` = 1.0, `floor_level` = 2, `monthly_rent` = 3000.00 WHERE `id` = 3;
 
 -- Re-enable foreign key constraints
 SET FOREIGN_KEY_CHECKS = 1;

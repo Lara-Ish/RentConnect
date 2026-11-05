@@ -21,6 +21,9 @@ if (Auth::check()) {
 }
 
 $errorMessage = null;
+if (isset($_GET['msg']) && $_GET['msg'] === 'deactivated') {
+    $errorMessage = 'This account has been deactivated or removed by property management.';
+}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $username = trim((string)($_POST['username'] ?? ''));
@@ -362,7 +365,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           </div>
 
           <div class="forgot-password-wrapper">
-            <a href="#" class="forgot-password-link" onclick="event.preventDefault();" title="Forgot Password?">Forgot Password?</a>
+            <a href="forgot_password.php" class="forgot-password-link" title="Forgot Password?">Forgot Password?</a>
           </div>
 
           <button type="submit" class="clay-btn clay-btn-primary clay-btn-full" style="margin-top: 0;">

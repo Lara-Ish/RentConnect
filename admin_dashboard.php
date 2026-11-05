@@ -8,6 +8,12 @@
 
 declare(strict_types=1);
 
+// Prevent browser caching so Back button cannot display protected dashboard after logout
+header("Cache-Control: no-store, no-cache, must-revalidate, max-age=0");
+header("Cache-Control: post-check=0, pre-check=0", false);
+header("Pragma: no-cache");
+header("Expires: Sat, 26 Jul 1997 05:00:00 GMT");
+
 require_once __DIR__ . '/config/auth.php';
 Auth::requireLandlord();
 
@@ -78,7 +84,7 @@ foreach ($allTenants as $t) {
 
 // Fetch Maintenance Tickets
 $tickets = $pdo->query("
-    SELECT mt.*, u.name AS tenant_name, un.unit_number
+    SELECT mt.*, u.name AS tenant_name, u.email AS tenant_email, u.phone AS tenant_phone, un.unit_number
     FROM maintenance_tickets mt
     JOIN users u ON mt.tenant_id = u.id
     JOIN units un ON mt.unit_id = un.id
@@ -87,15 +93,31 @@ $tickets = $pdo->query("
 
 // Fetch Payments Ledger & Pending Reviews
 $payments = $pdo->query("
-    SELECT p.*, u.name AS tenant_name, un.unit_number
+    SELECT p.*, u.name AS tenant_name, u.username AS tenant_username, u.move_in_date, un.unit_number
     FROM payments p
     JOIN users u ON p.tenant_id = u.id
     JOIN units un ON p.unit_id = un.id
-    ORDER BY p.billing_cycle DESC, p.id DESC
+    ORDER BY p.id DESC
 ")->fetchAll();
 
-// Count pending payment receipts for manual review badge
-$pendingReviewPayments = array_values(array_filter($payments, fn($p) => $p['status'] === 'pending'));
+// Collect distinct billing years from database payment records for filtering
+$availablePaymentYears = [];
+foreach ($payments as $p) {
+    if (!empty($p['billing_cycle'])) {
+        $yr = date('Y', strtotime($p['billing_cycle']));
+        if (!in_array($yr, $availablePaymentYears, true)) {
+            $availablePaymentYears[] = $yr;
+        }
+    }
+}
+$currentYear = date('Y');
+if (!in_array($currentYear, $availablePaymentYears, true)) {
+    $availablePaymentYears[] = $currentYear;
+}
+rsort($availablePaymentYears);
+
+// Count pending payment receipts for manual review badge (only those with uploaded receipts)
+$pendingReviewPayments = array_values(array_filter($payments, fn($p) => $p['status'] === 'pending' && !empty($p['receipt_filename'])));
 $pendingReviewCount = count($pendingReviewPayments);
 ?>
 <!DOCTYPE html>
@@ -152,6 +174,34 @@ $pendingReviewCount = count($pendingReviewPayments);
     @keyframes modalSlide {
       from { transform: translateY(20px) scale(0.96); opacity: 0; }
       to { transform: translateY(0) scale(1); opacity: 1; }
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .clay-spinner {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 2.5px solid rgba(99, 102, 241, 0.25);
+      border-top-color: #4f46e5;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    .btn-loading-state {
+      opacity: 0.75;
+      cursor: not-allowed !important;
+      pointer-events: none !important;
+    }
+    .clickable-payment-row {
+      cursor: pointer;
+      transition: background-color 0.18s ease, transform 0.15s ease, box-shadow 0.18s ease;
+    }
+    .clickable-payment-row:hover {
+      background-color: rgba(99, 102, 241, 0.06) !important;
+    }
+    .clickable-payment-row:active {
+      background-color: rgba(99, 102, 241, 0.12) !important;
     }
 
     /* Standardized Sidebar Layout & Stacking */
@@ -672,6 +722,7 @@ $pendingReviewCount = count($pendingReviewPayments);
                         <tr>
                           <th>Name</th>
                           <th>Username</th>
+                          <th>Date of Moving In</th>
                           <th>Birthday</th>
                           <th>Email</th>
                           <th>Phone Number</th>
@@ -691,6 +742,11 @@ $pendingReviewCount = count($pendingReviewPayments);
                           <td>
                             <span style="font-weight: 700; color: var(--clay-primary-dark); background: #e0e7ff; padding: 3px 8px; border-radius: 6px; font-size: 12.5px;">
                               @<?= htmlspecialchars($t['username']) ?>
+                            </span>
+                          </td>
+                          <td>
+                            <span style="font-weight: 700; color: #0f172a;">
+                              <?= !empty($t['move_in_date']) ? date('M j, Y', strtotime($t['move_in_date'])) : '<span style="color:var(--text-light)">N/A</span>' ?>
                             </span>
                           </td>
                           <td>
@@ -732,24 +788,42 @@ $pendingReviewCount = count($pendingReviewPayments);
               <thead>
                 <tr style="border-bottom: 2px solid rgba(166, 180, 204, 0.3); color: var(--text-muted); font-weight: 700;">
                   <th style="padding: 12px 14px;">Ticket #</th>
-                  <th style="padding: 12px 14px;">Unit</th>
                   <th style="padding: 12px 14px;">Tenant</th>
-                  <th style="padding: 12px 14px;">Issue Summary</th>
+                  <th style="padding: 12px 14px;">Unit</th>
                   <th style="padding: 12px 14px;">Category</th>
+                  <th style="padding: 12px 14px;">Issue Title</th>
+                  <th style="padding: 12px 14px;">Date Submitted</th>
                   <th style="padding: 12px 14px;">Priority</th>
                   <th style="padding: 12px 14px;">Status</th>
                   <th style="padding: 12px 14px;">Actual Cost</th>
+                  <th style="padding: 12px 14px; text-align: center;">Action</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody id="maintenanceTicketsTableBody">
+                <?php if (empty($tickets)): ?>
+                <tr>
+                  <td colspan="10" style="text-align: center; padding: 32px 14px; color: var(--text-muted); font-size: 14px;">
+                    No maintenance tickets currently logged.
+                  </td>
+                </tr>
+                <?php else: ?>
                 <?php foreach ($tickets as $tk): ?>
-                <tr style="border-bottom: 1px solid rgba(166, 180, 204, 0.15);">
-                  <td style="padding: 12px 14px; font-weight: 700;">#<?= $tk['id'] ?></td>
-                  <td style="padding: 12px 14px; font-weight: 700; color: #4338ca;"><?= htmlspecialchars($tk['unit_number']) ?></td>
-                  <td style="padding: 12px 14px;"><?= htmlspecialchars($tk['tenant_name']) ?></td>
+                <tr class="clickable-ticket-row ticket-record-row"
+                    id="ticket-row-<?= $tk['id'] ?>"
+                    style="border-bottom: 1px solid rgba(166, 180, 204, 0.15); cursor: pointer;"
+                    onclick="openTicketDetailsModal(<?= htmlspecialchars(json_encode($tk), ENT_QUOTES, 'UTF-8') ?>)"
+                    title="Click to view complete ticket details, uploaded photos, and reply">
+                  <td style="padding: 12px 14px; font-weight: 700; color: #4338ca;">#MT-<?= str_pad((string)$tk['id'], 4, '0', STR_PAD_LEFT) ?></td>
+                  <td style="padding: 12px 14px; font-weight: 600; color: #0f172a;"><?= htmlspecialchars($tk['tenant_name']) ?></td>
+                  <td style="padding: 12px 14px;">
+                    <span class="clay-badge" style="background: #e0e7ff; color: #4338ca; font-weight: 800; font-size: 11px;">
+                      <?= htmlspecialchars($tk['unit_number']) ?>
+                    </span>
+                  </td>
+                  <td style="padding: 12px 14px;"><span class="clay-badge badge-<?= strtolower($tk['category']) ?>"><?= $tk['category'] ?></span></td>
                   <td style="padding: 12px 14px;">
                     <div style="font-weight: 700; color: #1e293b;"><?= htmlspecialchars($tk['title']) ?></div>
-                    <div style="font-size: 12px; color: var(--text-muted);"><?= htmlspecialchars(substr($tk['description'], 0, 60)) ?>...</div>
+                    <div style="font-size: 12px; color: var(--text-muted);"><?= htmlspecialchars(substr($tk['description'], 0, 50)) ?><?= strlen($tk['description']) > 50 ? '...' : '' ?></div>
                     <?php if (!empty($tk['photo_path'])): ?>
                       <div style="margin-top: 4px; display: flex; gap: 4px; flex-wrap: wrap;">
                         <?php 
@@ -758,16 +832,18 @@ $pendingReviewCount = count($pendingReviewPayments);
                             $pItem = trim($pItem);
                             if (!$pItem) continue;
                         ?>
-                          <a href="<?= htmlspecialchars($pItem) ?>" target="_blank" class="btn-inspect-proof" style="font-size: 11px; padding: 2px 7px;">
+                          <a href="<?= htmlspecialchars($pItem) ?>" target="_blank" onclick="event.stopPropagation();" class="btn-inspect-proof" style="font-size: 10.5px; padding: 2px 7px;">
                             📷 Photo <?= count($pList) > 1 ? ($pIdx + 1) : '' ?>
                           </a>
                         <?php endforeach; ?>
                       </div>
                     <?php endif; ?>
                   </td>
-                  <td style="padding: 12px 14px;"><span class="clay-badge badge-<?= strtolower($tk['category']) ?>"><?= $tk['category'] ?></span></td>
+                  <td style="padding: 12px 14px; font-size: 12.5px; color: var(--text-muted); white-space: nowrap;">
+                    <?= date('M j, Y', strtotime($tk['created_at'])) ?>
+                  </td>
                   <td style="padding: 12px 14px;"><span class="clay-badge badge-<?= $tk['priority'] ?>"><?= strtoupper($tk['priority']) ?></span></td>
-                  <td style="padding: 12px 14px;">
+                  <td style="padding: 12px 14px;" onclick="event.stopPropagation();">
                     <select class="clay-select" style="padding: 6px 12px; font-size: 12px;" onchange="updateTicket(<?= $tk['id'] ?>, this.value, <?= (float)($tk['actual_cost'] ?? 0) ?>)">
                       <option value="open" <?= $tk['status'] === 'open' ? 'selected' : '' ?>>Open</option>
                       <option value="in_progress" <?= $tk['status'] === 'in_progress' ? 'selected' : '' ?>>In Progress</option>
@@ -775,11 +851,17 @@ $pendingReviewCount = count($pendingReviewPayments);
                       <option value="closed" <?= $tk['status'] === 'closed' ? 'selected' : '' ?>>Closed</option>
                     </select>
                   </td>
-                  <td style="padding: 12px 14px; font-weight: 700;">
+                  <td style="padding: 12px 14px; font-weight: 700;" onclick="event.stopPropagation();">
                     ₱<input type="number" class="clay-input" value="<?= number_format((float)$tk['actual_cost'], 2, '.', '') ?>" step="0.01" style="width: 95px; padding: 4px 8px; font-size: 12.5px; display: inline-block;" onchange="updateTicket(<?= $tk['id'] ?>, '<?= $tk['status'] ?>', this.value)">
+                  </td>
+                  <td style="padding: 12px 14px; text-align: center;" onclick="event.stopPropagation();">
+                    <button type="button" class="clay-btn btn-secondary" style="font-size: 11.5px; padding: 5px 12px;" onclick="openTicketDetailsModal(<?= htmlspecialchars(json_encode($tk), ENT_QUOTES, 'UTF-8') ?>)">
+                      💬 View / Reply
+                    </button>
                   </td>
                 </tr>
                 <?php endforeach; ?>
+                <?php endif; ?>
               </tbody>
             </table>
           </div>
@@ -793,15 +875,20 @@ $pendingReviewCount = count($pendingReviewPayments);
             <h1>Rent Payment Verification &amp; Audit</h1>
             <p>Review tenant-submitted payment receipts, inspect proof slips, and manually approve or reject payments</p>
           </div>
-          <?php if ($pendingReviewCount > 0): ?>
-            <span class="clay-badge badge-pending" style="font-size: 13px; padding: 8px 18px;">
-              ⏳ <?= $pendingReviewCount ?> Receipt<?= $pendingReviewCount === 1 ? '' : 's' ?> Awaiting Review
-            </span>
-          <?php else: ?>
-            <span class="clay-badge badge-approved" style="font-size: 13px; padding: 8px 18px;">
-              ✓ All Receipts Verified
-            </span>
-          <?php endif; ?>
+          <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+            <button type="button" class="clay-btn clay-btn-primary" onclick="openAnnouncementModal()" style="font-size: 13px; padding: 8px 18px; display: inline-flex; align-items: center; gap: 6px;">
+              📢 Send Rent Due Announcement
+            </button>
+            <?php if ($pendingReviewCount > 0): ?>
+              <span class="clay-badge badge-pending" style="font-size: 13px; padding: 8px 18px;">
+                ⏳ <?= $pendingReviewCount ?> Receipt<?= $pendingReviewCount === 1 ? '' : 's' ?> Awaiting Review
+              </span>
+            <?php else: ?>
+              <span class="clay-badge badge-approved" style="font-size: 13px; padding: 8px 18px;">
+                ✓ All Receipts Verified
+              </span>
+            <?php endif; ?>
+          </div>
         </div>
 
         <!-- Pending Review Queue (Displayed when tenant uploads receipts) -->
@@ -858,10 +945,10 @@ $pendingReviewCount = count($pendingReviewPayments);
               </div>
 
               <div class="verification-card-actions">
-                <button type="button" class="btn-verify-approve" onclick="openReviewModal(<?= $pending['id'] ?>, '<?= htmlspecialchars(addslashes($pending['tenant_name'])) ?>', '<?= htmlspecialchars($pending['unit_number']) ?>', '<?= date('F Y', strtotime($pending['billing_cycle'])) ?>', '<?= number_format((float)$pending['amount_paid'], 2) ?>', '<?= htmlspecialchars($pending['receipt_filename'] ?? '') ?>', 'approved')">
+                <button type="button" class="btn-verify-approve" onclick="openPaymentDetailsModal(<?= htmlspecialchars(json_encode($pending), ENT_QUOTES, 'UTF-8') ?>, 'approved')">
                   ✓ Approve
                 </button>
-                <button type="button" class="btn-verify-reject" onclick="openReviewModal(<?= $pending['id'] ?>, '<?= htmlspecialchars(addslashes($pending['tenant_name'])) ?>', '<?= htmlspecialchars($pending['unit_number']) ?>', '<?= date('F Y', strtotime($pending['billing_cycle'])) ?>', '<?= number_format((float)$pending['amount_paid'], 2) ?>', '<?= htmlspecialchars($pending['receipt_filename'] ?? '') ?>', 'rejected')">
+                <button type="button" class="btn-verify-reject" onclick="openPaymentDetailsModal(<?= htmlspecialchars(json_encode($pending), ENT_QUOTES, 'UTF-8') ?>, 'rejected')">
                   ✕ Reject
                 </button>
               </div>
@@ -871,14 +958,54 @@ $pendingReviewCount = count($pendingReviewPayments);
         </div>
         <?php endif; ?>
 
-        <!-- Full Payments Ledger Table -->
+        <!-- Full Payments Ledger Table with Filtering Dropdowns & Clickable Detail View -->
         <div class="clay-card">
-          <div class="widget-header" style="margin-bottom: 16px;">
+          <div class="widget-header" style="margin-bottom: 16px; display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 14px;">
             <div>
               <h2 class="widget-title" style="font-size: 18px;">All Invoices &amp; Verified Records</h2>
               <p style="font-size: 12.5px; color: var(--text-muted); margin-top: 2px;">
-                Complete ledger tracking tenant payments, verification status, and audit notes
+                Complete ledger tracking tenant payments, verification status, and audit notes. Click any row to view complete details.
               </p>
+            </div>
+
+            <!-- Month & Year Filtering Dropdowns -->
+            <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <label for="paymentFilterMonth" style="font-size: 12px; font-weight: 700; color: var(--text-muted);">Month:</label>
+                <select id="paymentFilterMonth" class="clay-select" onchange="applyPaymentFilters()" style="padding: 7px 12px; font-size: 13px; border-radius: var(--radius-sm); min-width: 130px; font-weight: 600;">
+                  <option value="all">All Months</option>
+                  <option value="01">January</option>
+                  <option value="02">February</option>
+                  <option value="03">March</option>
+                  <option value="04">April</option>
+                  <option value="05">May</option>
+                  <option value="06">June</option>
+                  <option value="07">July</option>
+                  <option value="08">August</option>
+                  <option value="09">September</option>
+                  <option value="10">October</option>
+                  <option value="11">November</option>
+                  <option value="12">December</option>
+                </select>
+              </div>
+
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <label for="paymentFilterYear" style="font-size: 12px; font-weight: 700; color: var(--text-muted);">Year:</label>
+                <select id="paymentFilterYear" class="clay-select" onchange="applyPaymentFilters()" style="padding: 7px 12px; font-size: 13px; border-radius: var(--radius-sm); min-width: 105px; font-weight: 600;">
+                  <option value="all">All Years</option>
+                  <?php foreach ($availablePaymentYears as $yr): ?>
+                    <option value="<?= htmlspecialchars($yr) ?>"><?= htmlspecialchars($yr) ?></option>
+                  <?php endforeach; ?>
+                </select>
+              </div>
+
+              <button type="button" class="clay-btn clay-btn-secondary" onclick="resetPaymentFilters()" style="padding: 7px 14px; font-size: 12.5px;" title="Reset filters to show all records">
+                ↺ Reset
+              </button>
+
+              <span id="paymentFilterCountBadge" class="clay-badge" style="background: #e0e7ff; color: #4338ca; font-size: 11.5px; font-weight: 700; padding: 7px 14px;">
+                Showing <?= count($payments) ?> Records
+              </span>
             </div>
           </div>
 
@@ -887,58 +1014,107 @@ $pendingReviewCount = count($pendingReviewPayments);
               <thead>
                 <tr style="border-bottom: 2px solid rgba(166, 180, 204, 0.3); color: var(--text-muted); font-weight: 700;">
                   <th style="padding: 12px 14px;">Billing Month</th>
+                  <th style="padding: 12px 14px;">Type</th>
                   <th style="padding: 12px 14px;">Unit</th>
                   <th style="padding: 12px 14px;">Tenant</th>
                   <th style="padding: 12px 14px;">Amount Due</th>
                   <th style="padding: 12px 14px;">Amount Paid</th>
                   <th style="padding: 12px 14px;">Status</th>
-                  <th style="padding: 12px 14px;">Receipt Proof</th>
-                  <th style="padding: 12px 14px;">Verification Notes</th>
-                  <th style="padding: 12px 14px; text-align: right;">Manual Action</th>
                 </tr>
               </thead>
-              <tbody>
-                <?php foreach ($payments as $pm): ?>
-                <tr style="border-bottom: 1px solid rgba(166, 180, 204, 0.15);">
-                  <td style="padding: 12px 14px; font-weight: 700;"><?= date('F Y', strtotime($pm['billing_cycle'])) ?></td>
-                  <td style="padding: 12px 14px; font-weight: 700; color: #4338ca;"><?= htmlspecialchars($pm['unit_number']) ?></td>
-                  <td style="padding: 12px 14px;"><?= htmlspecialchars($pm['tenant_name']) ?></td>
-                  <td style="padding: 12px 14px; font-weight: 700;">₱<?= number_format((float)$pm['amount_due'], 2) ?></td>
-                  <td style="padding: 12px 14px; font-weight: 700; color: #047857;">₱<?= number_format((float)$pm['amount_paid'], 2) ?></td>
-                  <td style="padding: 12px 14px;">
-                    <span class="clay-badge badge-<?= strtolower($pm['status']) ?>"><?= strtoupper($pm['status']) ?></span>
+              <tbody id="paymentRecordsTableBody">
+                <?php if (empty($payments)): ?>
+                <tr id="paymentEmptyStateRow">
+                  <td colspan="7" style="text-align: center; padding: 32px 14px; color: var(--text-muted); font-size: 14px;">
+                    No payment records found. Adding a resident will automatically generate a placeholder rent record awaiting setup.
                   </td>
-                  <td style="padding: 12px 14px;">
-                    <?php if ($pm['receipt_filename']): ?>
-                      <a href="uploads/receipts/<?= htmlspecialchars($pm['receipt_filename']) ?>" target="_blank" class="btn-inspect-proof">
-                        📄 View Proof
-                      </a>
+                </tr>
+                <?php else: ?>
+                <?php foreach ($payments as $pm): ?>
+                <tr class="clickable-payment-row payment-record-row"
+                    id="payment-row-<?= $pm['id'] ?>"
+                    data-id="<?= $pm['id'] ?>"
+                    data-month="<?= !empty($pm['billing_cycle']) ? date('m', strtotime($pm['billing_cycle'])) : '' ?>"
+                    data-year="<?= !empty($pm['billing_cycle']) ? date('Y', strtotime($pm['billing_cycle'])) : '' ?>"
+                    data-status="<?= htmlspecialchars($pm['status']) ?>"
+                    onclick="openPaymentDetailsModal(<?= htmlspecialchars(json_encode($pm), ENT_QUOTES, 'UTF-8') ?>)"
+                    title="Click to view detailed payment verification &amp; audit">
+                  <td style="padding: 14px; font-weight: 700;">
+                    <?php if (!empty($pm['billing_cycle'])): ?>
+                      <?= date('F Y', strtotime($pm['billing_cycle'])) ?>
                     <?php else: ?>
-                      <span style="font-size: 12px; color: var(--text-light);">No receipt</span>
+                      <span style="color: #92400e; font-style: italic; background: #fef3c7; padding: 3px 8px; border-radius: 6px; font-size: 11.5px; border: 1px solid rgba(245, 158, 11, 0.25);">To be assigned</span>
                     <?php endif; ?>
                   </td>
-                  <td style="padding: 12px 14px; font-size: 12px; color: var(--text-muted); max-width: 220px;">
-                    <?= htmlspecialchars($pm['verification_notes'] ?: ($pm['verified_by_landlord'] ? 'Verified & approved' : '—')) ?>
-                  </td>
-                  <td style="padding: 12px 14px; text-align: right;">
-                    <?php if ($pm['status'] === 'pending'): ?>
-                      <button type="button" class="clay-btn clay-btn-primary" style="padding: 6px 14px; font-size: 11.5px;" onclick="openReviewModal(<?= $pm['id'] ?>, '<?= htmlspecialchars(addslashes($pm['tenant_name'])) ?>', '<?= htmlspecialchars($pm['unit_number']) ?>', '<?= date('F Y', strtotime($pm['billing_cycle'])) ?>', '<?= number_format((float)$pm['amount_paid'], 2) ?>', '<?= htmlspecialchars($pm['receipt_filename'] ?? '') ?>')">
-                        Review Proof
-                      </button>
-                    <?php elseif ($pm['status'] === 'approved'): ?>
-                      <button type="button" class="clay-btn clay-btn-secondary" style="padding: 6px 14px; font-size: 11.5px;" onclick="openReviewModal(<?= $pm['id'] ?>, '<?= htmlspecialchars(addslashes($pm['tenant_name'])) ?>', '<?= htmlspecialchars($pm['unit_number']) ?>', '<?= date('F Y', strtotime($pm['billing_cycle'])) ?>', '<?= number_format((float)$pm['amount_paid'], 2) ?>', '<?= htmlspecialchars($pm['receipt_filename'] ?? '') ?>', 'approved')">
-                        Re-audit
-                      </button>
-                    <?php elseif ($pm['status'] === 'rejected'): ?>
-                      <button type="button" class="clay-btn clay-btn-secondary" style="padding: 6px 14px; font-size: 11.5px;" onclick="openReviewModal(<?= $pm['id'] ?>, '<?= htmlspecialchars(addslashes($pm['tenant_name'])) ?>', '<?= htmlspecialchars($pm['unit_number']) ?>', '<?= date('F Y', strtotime($pm['billing_cycle'])) ?>', '<?= number_format((float)$pm['amount_paid'], 2) ?>', '<?= htmlspecialchars($pm['receipt_filename'] ?? '') ?>', 'rejected')">
-                        Re-evaluate
-                      </button>
+                  <td style="padding: 14px;">
+                    <?php if (($pm['payment_type'] ?? 'Rent') === 'Advance Deposit'): ?>
+                      <span class="clay-badge" style="background: #ede9fe; color: #6d28d9; font-weight: 800; font-size: 11px; border: 1px solid rgba(109, 40, 217, 0.25);">
+                        Advance Deposit
+                      </span>
                     <?php else: ?>
-                      <span style="font-size: 12px; color: var(--text-muted);">Awaiting proof</span>
+                      <span class="clay-badge" style="background: #e0f2fe; color: #0369a1; font-weight: 800; font-size: 11px; border: 1px solid rgba(3, 105, 161, 0.25);">
+                        Monthly Rent
+                      </span>
+                    <?php endif; ?>
+                  </td>
+                  <td style="padding: 14px;">
+                    <span class="clay-badge" style="background: #e0e7ff; color: #4338ca; font-weight: 800; font-size: 11.5px;">
+                      <?= htmlspecialchars($pm['unit_number']) ?>
+                    </span>
+                  </td>
+                  <td style="padding: 14px;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                      <div style="width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, #a5b4fc, #818cf8); color: #fff; font-weight: 800; font-size: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                        <?= strtoupper(substr($pm['tenant_name'], 0, 1)) ?>
+                      </div>
+                      <span style="font-weight: 600; color: #0f172a;"><?= htmlspecialchars($pm['tenant_name']) ?></span>
+                    </div>
+                  </td>
+                  <td style="padding: 14px; font-weight: 700;">
+                    <?php if ($pm['amount_due'] !== null && (float)$pm['amount_due'] > 0): ?>
+                      ₱<?= number_format((float)$pm['amount_due'], 2) ?>
+                    <?php else: ?>
+                      <span style="color: var(--text-muted); font-style: italic; font-size: 12px;">Awaiting configuration</span>
+                    <?php endif; ?>
+                  </td>
+                  <td style="padding: 14px; font-weight: 700; color: <?= (float)$pm['amount_paid'] > 0 ? '#047857' : 'var(--text-muted)' ?>;">
+                    ₱<?= number_format((float)$pm['amount_paid'], 2) ?>
+                  </td>
+                  <td style="padding: 14px;">
+                    <?php if ($pm['status'] === 'pending_setup'): ?>
+                      <span class="clay-badge" style="background: #fef3c7; color: #92400e; font-weight: 800; border: 1px solid rgba(245, 158, 11, 0.35); font-size: 10.5px; padding: 4px 10px;">
+                        AWAITING CONFIGURATION
+                      </span>
+                    <?php elseif ($pm['status'] === 'unpaid'): ?>
+                      <span class="clay-badge" style="background: #fee2e2; color: #991b1b; font-weight: 800; border: 1px solid rgba(239, 68, 68, 0.35); font-size: 10.5px; padding: 4px 10px;">
+                        UNPAID
+                      </span>
+                    <?php elseif ($pm['status'] === 'pending'): ?>
+                      <span class="clay-badge badge-pending" style="font-size: 10.5px; padding: 4px 10px;">
+                        PENDING REVIEW
+                      </span>
+                    <?php elseif ($pm['status'] === 'approved'): ?>
+                      <span class="clay-badge badge-approved" style="font-size: 10.5px; padding: 4px 10px;">
+                        APPROVED
+                      </span>
+                    <?php elseif ($pm['status'] === 'rejected'): ?>
+                      <span class="clay-badge badge-rejected" style="font-size: 10.5px; padding: 4px 10px;">
+                        REJECTED
+                      </span>
+                    <?php else: ?>
+                      <span class="clay-badge badge-<?= strtolower($pm['status']) ?>" style="font-size: 10.5px; padding: 4px 10px;">
+                        <?= strtoupper($pm['status']) ?>
+                      </span>
                     <?php endif; ?>
                   </td>
                 </tr>
                 <?php endforeach; ?>
+                <tr id="paymentNoFilterResultsRow" style="display: none;">
+                  <td colspan="7" style="text-align: center; padding: 32px 14px; color: var(--text-muted); font-size: 13.5px;">
+                    No payment records match the selected month and year filters. <a href="javascript:void(0)" onclick="resetPaymentFilters()" style="color: var(--clay-primary); font-weight: 700; text-decoration: underline;">Reset filters</a>
+                  </td>
+                </tr>
+                <?php endif; ?>
               </tbody>
             </table>
           </div>
@@ -1060,55 +1236,249 @@ $pendingReviewCount = count($pendingReviewPayments);
   </div>
 
   <!-- =====================================================================
-       MODAL: MANUAL PAYMENT VERIFICATION & PROOF INSPECTION
+       MODAL: COMPREHENSIVE PAYMENT DETAILS & MANUAL VERIFICATION AUDIT
+       Sections:
+         A. Billing Information (Month, Year, Unit, Tenant, Move-in, Due, Paid, Remaining Balance, Status, Due Date)
+         B. Payment Information (Method, Submission Date, Ref Number, Receipt Proof Preview/Inspect, Tenant Remarks)
+         C. Verification Actions (Remarks/Reason, Approve, Reject, Double-click protection)
        ===================================================================== -->
-  <div class="modal-backdrop" id="reviewPaymentModal">
-    <div class="clay-modal">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-        <div>
-          <h2 style="font-size: 20px; font-weight: 800; color: #0f172a;">Verify Payment Receipt</h2>
-          <p style="font-size: 12.5px; color: var(--text-muted); margin-top: 2px;">Inspect tenant proof and record verification status</p>
+  <div class="modal-backdrop" id="paymentDetailsModal">
+    <div class="clay-modal" style="max-width: 640px; max-height: 92vh; overflow-y: auto;">
+      
+      <!-- Modal Header -->
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 18px; border-bottom: 1px solid var(--clay-border); padding-bottom: 14px;">
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <div style="width: 44px; height: 44px; border-radius: 12px; background: linear-gradient(135deg, #a5b4fc, #6366f1); color: #fff; font-size: 22px; display: flex; align-items: center; justify-content: center; box-shadow: 2px 2px 8px rgba(99, 102, 241, 0.3);">
+            💳
+          </div>
+          <div>
+            <h2 style="font-size: 20px; font-weight: 800; color: #0f172a; margin: 0; line-height: 1.2;">Payment Verification &amp; Details</h2>
+            <p style="font-size: 12.5px; color: var(--text-muted); margin-top: 3px;">
+              Review billing metrics, inspect uploaded proof slip, and execute verification decisions
+            </p>
+          </div>
         </div>
-        <button type="button" class="btn-remove-file" onclick="closeReviewModal()">✕</button>
+        <button type="button" class="btn-remove-file" onclick="closePaymentDetailsModal()" title="Close details modal">✕</button>
       </div>
 
+      <input type="hidden" id="pdPaymentId" value="">
       <input type="hidden" id="reviewPaymentId" value="">
 
-      <!-- Payment Summary Details -->
-      <div style="background: var(--clay-input-bg); border-radius: var(--radius-md); padding: 14px 18px; box-shadow: var(--clay-sunken-shadow); margin-bottom: 18px;">
+      <!-- ===================================================================
+           SECTION A: BILLING INFORMATION
+           =================================================================== -->
+      <div style="background: var(--clay-input-bg); border-radius: var(--radius-md); padding: 16px; box-shadow: var(--clay-sunken-shadow); margin-bottom: 16px;">
+        <div style="font-size: 13.5px; font-weight: 800; color: #0f172a; margin-bottom: 14px; display: flex; align-items: center; justify-content: space-between;">
+          <span style="display: flex; align-items: center; gap: 6px;">
+            <span style="font-size: 15px;">📋</span>
+            <span>Section A: Billing Information</span>
+          </span>
+          <span id="pdStatusBadge" class="clay-badge badge-pending">PENDING</span>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 13px;">
+          <div>
+            <span style="color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase;">Payment Category:</span>
+            <div id="pdPaymentType" style="font-weight: 800; color: #6d28d9; margin-top: 2px; font-size: 14px;">Rent</div>
+          </div>
+          <div>
+            <span style="color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase;">Tenant Name:</span>
+            <div id="pdTenantName" style="font-weight: 800; color: #0f172a; margin-top: 2px; font-size: 14px;">-</div>
+          </div>
+          <div>
+            <span style="color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase;">Apartment Unit:</span>
+            <div id="pdUnitNumber" style="font-weight: 800; color: #4338ca; margin-top: 2px; font-size: 14px;">-</div>
+          </div>
+          <div>
+            <span style="color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase;">Billing Month:</span>
+            <div id="pdBillingMonth" style="font-weight: 800; color: #0f172a; margin-top: 2px;">-</div>
+          </div>
+          <div>
+            <span style="color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase;">Billing Year:</span>
+            <div id="pdBillingYear" style="font-weight: 800; color: #0f172a; margin-top: 2px;">-</div>
+          </div>
+          <div>
+            <span style="color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase;">Date of Moving In:</span>
+            <div id="pdMoveInDate" style="font-weight: 800; color: #0f172a; margin-top: 2px;">-</div>
+          </div>
+          <div>
+            <span style="color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase;">Payment Due Date:</span>
+            <div id="pdDueDate" style="font-weight: 800; color: #dc2626; margin-top: 2px;">-</div>
+          </div>
+        </div>
+
+        <!-- Financial Figures Row -->
+        <div style="margin-top: 14px; padding-top: 14px; border-top: 1px dashed rgba(166, 180, 204, 0.4); display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; text-align: center;">
+          <div style="background: #ffffff; padding: 10px 8px; border-radius: var(--radius-sm); border: 1px solid var(--clay-border);">
+            <div style="font-size: 10.5px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Amount Due</div>
+            <div id="pdAmountDue" style="font-size: 15px; font-weight: 800; color: #0f172a; margin-top: 3px;">₱0.00</div>
+          </div>
+          <div style="background: #ffffff; padding: 10px 8px; border-radius: var(--radius-sm); border: 1px solid var(--clay-border);">
+            <div style="font-size: 10.5px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Amount Paid</div>
+            <div id="pdAmountPaid" style="font-size: 15px; font-weight: 800; color: #047857; margin-top: 3px;">₱0.00</div>
+          </div>
+          <div style="background: #ffffff; padding: 10px 8px; border-radius: var(--radius-sm); border: 1px solid var(--clay-border);">
+            <div style="font-size: 10.5px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Remaining Balance</div>
+            <div id="pdRemainingBalance" style="font-size: 15px; font-weight: 800; color: #dc2626; margin-top: 3px;">₱0.00</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===================================================================
+           SECTION B: PAYMENT INFORMATION & PROOF
+           =================================================================== -->
+      <div style="background: var(--clay-input-bg); border-radius: var(--radius-md); padding: 16px; box-shadow: var(--clay-sunken-shadow); margin-bottom: 16px;">
+        <div style="font-size: 13.5px; font-weight: 800; color: #0f172a; margin-bottom: 12px; display: flex; align-items: center; gap: 6px;">
+          <span style="font-size: 15px;">🧾</span>
+          <span>Section B: Payment Information &amp; Proof</span>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 13px; margin-bottom: 12px;">
+          <div>
+            <span style="color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase;">Payment Method:</span>
+            <div id="pdPaymentMethod" style="font-weight: 800; color: #0f172a; margin-top: 2px;">GCash / Bank Transfer</div>
+          </div>
+          <div>
+            <span style="color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase;">Payment / Submission Date:</span>
+            <div id="pdPaymentDate" style="font-weight: 800; color: #0f172a; margin-top: 2px;">-</div>
+          </div>
+          <div style="grid-column: 1 / -1;">
+            <span style="color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase;">Payment Reference Number:</span>
+            <div id="pdRefNumber" style="font-weight: 800; color: #4338ca; margin-top: 2px; font-family: monospace; font-size: 13.5px;">-</div>
+          </div>
+          <div style="grid-column: 1 / -1;">
+            <span style="color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase;">Tenant's Payment Remarks:</span>
+            <div id="pdTenantRemarks" style="font-size: 12.5px; color: #334155; margin-top: 3px; font-style: italic; background: #ffffff; padding: 8px 12px; border-radius: var(--radius-sm); border: 1px solid var(--clay-border);">None provided</div>
+          </div>
+        </div>
+
+        <!-- Uploaded Payment Receipt / Proof Slip with Preview & Inspect button -->
+        <div style="margin-top: 10px;">
+          <label class="form-label" style="font-size: 11.5px; margin-bottom: 6px;">Uploaded Payment Receipt / Proof</label>
+          <div id="pdReceiptWrapper" style="padding: 14px; background: var(--clay-card-bg); border-radius: var(--radius-md); border: 1px solid var(--clay-border); text-align: center;">
+            <div id="pdNoReceiptMsg" style="font-size: 13px; color: var(--text-muted); padding: 8px 0;">
+              No receipt uploaded yet (Awaiting tenant submission).
+            </div>
+            <div id="pdReceiptContent" style="display: none;">
+              <div style="margin-bottom: 10px;">
+                <a id="pdReceiptInspectBtn" href="#" target="_blank" class="btn-inspect-proof" style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 18px; font-size: 13px;">
+                  📄 Inspect Proof in New Tab
+                </a>
+              </div>
+              <!-- Image preview box -->
+              <div id="pdReceiptPreviewBox" style="display: none; margin-top: 8px; border-radius: 10px; overflow: hidden; background: rgba(15, 23, 42, 0.04); border: 1px solid var(--clay-border); padding: 8px;">
+                <img id="pdReceiptImage" src="" alt="Payment Receipt" style="max-height: 250px; max-width: 100%; object-fit: contain; border-radius: 6px; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.08);" onclick="window.open(this.src, '_blank')" title="Click to open full view in new tab">
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===================================================================
+           SECTION C: VERIFICATION ACTIONS & AUDIT
+           =================================================================== -->
+      <div style="background: var(--clay-input-bg); border-radius: var(--radius-md); padding: 16px; box-shadow: var(--clay-sunken-shadow); margin-bottom: 10px;">
+        <div style="font-size: 13.5px; font-weight: 800; color: #0f172a; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between;">
+          <span style="display: flex; align-items: center; gap: 6px;">
+            <span style="font-size: 15px;">⚖️</span>
+            <span>Section C: Verification Actions</span>
+          </span>
+          <span id="pdVerifiedMeta" style="font-size: 11px; color: var(--text-muted);"></span>
+        </div>
+
+        <div class="form-group" style="margin-bottom: 14px;">
+          <label class="form-label" for="pdVerificationNotes">
+            Remarks / Reason for Decision <span id="pdNotesRequiredLabel" style="display: none; color: #ef4444; font-size: 11px;">(Required when rejecting payment)</span>
+          </label>
+          <textarea id="pdVerificationNotes" class="clay-textarea" placeholder="Enter verification feedback or explanation (e.g. Bank transfer reference confirmed, or Payment proof was blurry/partial amount)..." rows="3"></textarea>
+        </div>
+
+        <!-- Verification Action Buttons -->
+        <div id="pdActionButtonsRow" style="display: flex; gap: 12px;">
+          <button type="button" id="btnPdReject" class="btn-verify-reject" style="flex: 1; padding: 12px; font-size: 13.5px; font-weight: 800;" onclick="handlePaymentVerificationDecision('rejected')">
+            ✕ Reject Payment
+          </button>
+          <button type="button" id="btnPdApprove" class="btn-verify-approve" style="flex: 1; padding: 12px; font-size: 13.5px; font-weight: 800;" onclick="handlePaymentVerificationDecision('approved')">
+            ✓ Approve Payment
+          </button>
+        </div>
+
+        <!-- Special Action for Placeholder Rent Setup -->
+        <div id="pdSetupActionRow" style="display: none; margin-top: 10px;">
+          <button type="button" class="clay-btn clay-btn-primary" style="width: 100%; padding: 12px; font-size: 13.5px; background: linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%); color: #fff;" onclick="triggerSetupFromModal()">
+            ⚙️ Configure Monthly Rent &amp; Billing Cycle
+          </button>
+        </div>
+
+        <!-- Processing Indicator with Spinner (Double-Click & Concurrency Protection) -->
+        <div id="pdProcessingIndicator" style="display: none; align-items: center; justify-content: center; gap: 10px; color: #4338ca; font-weight: 700; font-size: 13px; padding: 12px 0;">
+          <span class="clay-spinner" style="width: 20px; height: 20px; border-width: 2.5px;"></span>
+          <span id="pdProcessingText">Processing decision and dispatching notification email...</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       MODAL: CONFIGURE PLACEHOLDER RENT RECORD
+       Allows Landlord to enter: Monthly Rent Amount, Billing Period / Month, Due Date.
+       Once configured, activates record to 'pending' awaiting tenant payment.
+       ===================================================================== -->
+  <div class="modal-backdrop" id="configureRentModal">
+    <div class="clay-modal" style="max-width: 520px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+        <div>
+          <h2 style="font-size: 20px; font-weight: 800; color: #0f172a;" id="configRentTitle">Configure Rent Record</h2>
+          <p style="font-size: 12.5px; color: var(--text-muted); margin-top: 2px;">Set monthly rent amount, billing cycle, and payment due date</p>
+        </div>
+        <button type="button" class="btn-remove-file" onclick="closeConfigureRentModal()">✕</button>
+      </div>
+
+      <input type="hidden" id="configPaymentId" value="">
+
+      <!-- Target Tenant & Unit Details -->
+      <div style="background: var(--clay-input-bg); border-radius: var(--radius-md); padding: 14px 18px; box-shadow: var(--clay-sunken-shadow); margin-bottom: 20px;">
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px;">
-          <div><span style="color: var(--text-muted);">Resident:</span> <strong id="reviewTenantName" style="color: #0f172a;">-</strong></div>
-          <div><span style="color: var(--text-muted);">Apartment Unit:</span> <strong id="reviewUnitNumber" style="color: #4338ca;">-</strong></div>
-          <div><span style="color: var(--text-muted);">Billing Cycle:</span> <strong id="reviewBillingCycle">-</strong></div>
-          <div><span style="color: var(--text-muted);">Submitted Amount:</span> <strong id="reviewAmountPaid" style="color: #047857;">-</strong></div>
+          <div><span style="color: var(--text-muted);">Resident:</span> <strong id="configTenantName" style="color: #0f172a;">-</strong></div>
+          <div><span style="color: var(--text-muted);">Apartment Unit:</span> <strong id="configUnitNumber" style="color: #4338ca;">-</strong></div>
         </div>
       </div>
 
-      <!-- Proof Inspection Link / Thumbnail -->
-      <div class="form-group" style="margin-bottom: 18px;">
-        <label class="form-label">Receipt File Proof</label>
-        <div id="reviewProofContainer" style="padding: 12px; background: var(--clay-card-bg); border-radius: var(--radius-md); border: 1px solid var(--clay-border); text-align: center;">
-          <a id="reviewProofLink" href="#" target="_blank" class="btn-inspect-proof" style="font-size: 13px; padding: 8px 16px;">
-            📄 Click to Inspect Receipt in New Tab
-          </a>
+      <form id="configureRentForm" onsubmit="event.preventDefault(); submitConfigureRent();">
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label class="form-label" for="configMonthlyRent">Monthly Rent Amount (₱) *</label>
+          <div style="position: relative;">
+            <span style="position: absolute; left: 14px; top: 50%; transform: translateY(-50%); font-weight: 700; color: var(--text-muted);">₱</span>
+            <input type="number" id="configMonthlyRent" class="clay-input" style="padding-left: 32px;" step="0.01" min="1" placeholder="e.g. 8000.00" required>
+          </div>
+          <span style="font-size: 11px; color: var(--text-muted); margin-top: 4px; display: block;">Standard suggestions: Unit 1: ₱6,000 | Unit 2: ₱8,000 | Unit 3: ₱8,000</span>
         </div>
-      </div>
 
-      <!-- Landlord Verification Feedback Notes -->
-      <div class="form-group" style="margin-bottom: 20px;">
-        <label class="form-label" for="reviewNotes">Verification Feedback / Notes</label>
-        <textarea id="reviewNotes" class="clay-textarea" placeholder="Optional notes for tenant (e.g. Bank transfer reference confirmed, or partial payment detected)..." rows="3"></textarea>
-      </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 16px;">
+          <div class="form-group" style="margin-bottom: 0;">
+            <label class="form-label" for="configBillingCycle">Billing Month *</label>
+            <input type="month" id="configBillingCycle" class="clay-input" required>
+          </div>
+          <div class="form-group" style="margin-bottom: 0;">
+            <label class="form-label" for="configDueDate">Payment Due Date *</label>
+            <input type="date" id="configDueDate" class="clay-input" required>
+          </div>
+        </div>
 
-      <!-- Dual Action Buttons: Approve vs Reject -->
-      <div style="display: flex; gap: 12px;">
-        <button type="button" class="btn-verify-reject" style="flex: 1; padding: 12px;" onclick="submitPaymentReview('rejected')">
-          ✕ Reject Receipt
-        </button>
-        <button type="button" class="btn-verify-approve" style="flex: 1; padding: 12px;" onclick="submitPaymentReview('approved')">
-          ✓ Approve &amp; Verify Payment
-        </button>
-      </div>
+        <div style="background: rgba(124, 58, 237, 0.06); border: 1px solid rgba(124, 58, 237, 0.2); border-radius: var(--radius-md); padding: 12px 14px; margin-bottom: 22px; font-size: 12px; color: #4c1d95; line-height: 1.45;">
+          ℹ️ <strong>Note:</strong> Configuring this rent converts it to an active pending invoice. It will <strong>NOT</strong> be treated as paid and no receipt is generated until the resident submits payment proof.
+        </div>
+
+        <div style="display: flex; gap: 12px; justify-content: flex-end;">
+          <button type="button" class="clay-btn clay-btn-secondary" style="padding: 10px 18px;" onclick="closeConfigureRentModal()">
+            Cancel
+          </button>
+          <button type="submit" class="clay-btn clay-btn-primary" style="padding: 10px 22px; background: linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%); color: #fff;">
+            ✓ Save &amp; Activate Rent
+          </button>
+        </div>
+      </form>
     </div>
   </div>
 
@@ -1143,14 +1513,30 @@ $pendingReviewCount = count($pendingReviewPayments);
           </div>
         </div>
 
-        <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 14px;">
+        <div class="form-group">
+          <label class="form-label" for="newName">Full Name <span class="req">*</span></label>
+          <input type="text" id="newName" name="name" class="clay-input" placeholder="e.g. Michael Jordan" required>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
           <div class="form-group">
-            <label class="form-label" for="newName">Full Name <span class="req">*</span></label>
-            <input type="text" id="newName" name="name" class="clay-input" placeholder="e.g. Michael Jordan" required>
+            <label class="form-label" for="newMoveInDate">Date of Moving In <span class="req">*</span></label>
+            <input type="date"
+                   id="newMoveInDate"
+                   name="move_in_date"
+                   class="clay-input"
+                   required
+                   min="<?= (new DateTime('now', new DateTimeZone('Asia/Manila')))->format('Y-m-d') ?>"
+                   value="<?= (new DateTime('now', new DateTimeZone('Asia/Manila')))->format('Y-m-d') ?>">
           </div>
           <div class="form-group">
             <label class="form-label" for="newBirthday">Birthday <span class="req">*</span></label>
-            <input type="date" id="newBirthday" name="birthday" class="clay-input" required>
+            <input type="date"
+                   id="newBirthday"
+                   name="birthday"
+                   class="clay-input"
+                   required
+                   max="<?= (new DateTime('now', new DateTimeZone('Asia/Manila')))->format('Y-m-d') ?>">
           </div>
         </div>
 
@@ -1227,9 +1613,29 @@ $pendingReviewCount = count($pendingReviewPayments);
           <span>Login credentials will be automatically generated in sequential ID format (<strong>RC00X</strong>) with a 6-digit passcode.</span>
         </div>
 
+        <!-- Loading & Status State Container -->
+        <div id="tenantCreationStatus" style="display: none; margin-bottom: 16px; padding: 12px 14px; border-radius: var(--radius-md); text-align: center; transition: all 0.25s ease;">
+          <div id="tenantCreationLoading" style="display: flex; align-items: center; justify-content: center; gap: 10px; color: #4338ca; font-weight: 700; font-size: 13px;">
+            <span class="clay-spinner" style="width: 18px; height: 18px; border-width: 2.5px;"></span>
+            <span>Creating tenant account, please wait...</span>
+          </div>
+          <div id="tenantCreationSuccess" style="display: none; align-items: center; justify-content: center; gap: 8px; color: #047857; font-weight: 700; font-size: 13px;">
+            <svg style="width: 18px; height: 18px; color: #10b981; flex-shrink: 0;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+            </svg>
+            <span id="tenantCreationSuccessText">Tenant account created successfully! Account details have been sent to the tenant's email address.</span>
+          </div>
+          <div id="tenantCreationError" style="display: none; align-items: center; justify-content: center; gap: 8px; color: #b91c1c; font-weight: 700; font-size: 13px;">
+            <svg style="width: 18px; height: 18px; color: #ef4444; flex-shrink: 0;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span id="tenantCreationErrorText"></span>
+          </div>
+        </div>
+
         <div style="display: flex; gap: 12px;">
-          <button type="button" class="clay-btn clay-btn-secondary" style="flex: 1;" onclick="closeAddTenantModal()">Cancel</button>
-          <button type="submit" class="clay-btn clay-btn-primary" style="flex: 2;">Register &amp; Generate Credentials</button>
+          <button type="button" id="btnCancelCreateTenant" class="clay-btn clay-btn-secondary" style="flex: 1;" onclick="closeAddTenantModal()">Cancel</button>
+          <button type="submit" id="btnSubmitCreateTenant" class="clay-btn clay-btn-primary" style="flex: 2;">Register &amp; Generate Credentials</button>
         </div>
       </form>
     </div>
@@ -1381,6 +1787,155 @@ $pendingReviewCount = count($pendingReviewPayments);
           🗑️ Delete Account (Moved Out)
         </button>
       </div>
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       MODAL: MAINTENANCE TICKET DETAILS, REPLY & STATUS UPDATE
+       ===================================================================== -->
+  <div class="modal-backdrop" id="ticketReplyModal">
+    <div class="clay-modal" style="max-width: 620px; width: 95%; max-height: 90vh; overflow-y: auto;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; border-bottom: 1px solid rgba(166, 180, 204, 0.2); padding-bottom: 12px;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span class="clay-badge" id="replyTicketIdLabel" style="background: #e0e7ff; color: #4338ca; font-weight: 800; font-size: 13px;">#MT-0001</span>
+          <div>
+            <h2 style="font-size: 19px; font-weight: 800; color: #0f172a; margin: 0;" id="replyTicketTitle">Maintenance Request Details</h2>
+            <p style="font-size: 12px; color: var(--text-muted); margin: 2px 0 0 0;">Inspect complete problem description, photos, and update status</p>
+          </div>
+        </div>
+        <button type="button" class="btn-remove-file" onclick="closeTicketReplyModal()" style="font-size: 18px;">✕</button>
+      </div>
+
+      <input type="hidden" id="replyTicketId" value="">
+
+      <!-- Metadata Badges -->
+      <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px;">
+        <span class="clay-badge" id="replyTicketUnitBadge" style="background: #e0e7ff; color: #4338ca; font-weight: 800;">Unit -</span>
+        <span class="clay-badge" id="replyTicketCatBadge">General</span>
+        <span class="clay-badge" id="replyTicketPrioBadge">Medium</span>
+        <span class="clay-badge" id="replyTicketStatusBadge">OPEN</span>
+      </div>
+
+      <!-- Tenant & Timestamps Summary -->
+      <div style="background: var(--clay-input-bg); border-radius: var(--radius-md); padding: 12px 16px; box-shadow: var(--clay-sunken-shadow); margin-bottom: 14px;">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 12.5px;">
+          <div><span style="color: var(--text-muted);">Tenant:</span> <strong id="replyTicketTenant" style="color: #0f172a;">-</strong></div>
+          <div><span style="color: var(--text-muted);">Unit:</span> <strong id="replyTicketUnit" style="color: #4338ca;">-</strong></div>
+          <div><span style="color: var(--text-muted);">Email:</span> <span id="replyTicketEmail" style="color: #334155; font-weight: 600;">-</span></div>
+          <div><span style="color: var(--text-muted);">Phone:</span> <span id="replyTicketPhone" style="color: #334155; font-weight: 600;">-</span></div>
+          <div><span style="color: var(--text-muted);">Date Submitted:</span> <strong id="replyTicketDateSubmitted" style="color: #0f172a;">-</strong></div>
+          <div><span style="color: var(--text-muted);">Date Resolved:</span> <span id="replyTicketDateResolved" style="color: #047857; font-weight: 600;">-</span></div>
+        </div>
+      </div>
+
+      <!-- Problem Description -->
+      <div style="background: var(--clay-input-bg); border-radius: var(--radius-md); padding: 14px 16px; margin-bottom: 14px; box-shadow: var(--clay-sunken-shadow);">
+        <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 5px;">Full Description of the Problem</div>
+        <p id="replyTicketDescription" style="font-size: 13.5px; color: #1e293b; line-height: 1.5; white-space: pre-wrap; margin: 0;"></p>
+      </div>
+
+      <!-- Uploaded Images / Attachments -->
+      <div id="replyTicketPhotosSection" style="margin-bottom: 16px; display: none;">
+        <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 6px;">Uploaded Photos / Attachments</div>
+        <div id="replyTicketPhotosContainer" style="display: flex; gap: 10px; flex-wrap: wrap;"></div>
+      </div>
+
+      <form id="ticketReplyForm" onsubmit="event.preventDefault(); submitTicketReply();">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 16px;">
+          <div class="form-group" style="margin-bottom: 0;">
+            <label class="form-label" for="replyTicketStatus">Update Status *</label>
+            <select id="replyTicketStatus" class="clay-select" style="width: 100%;">
+              <option value="open">Open</option>
+              <option value="in_progress">In Progress</option>
+              <option value="resolved">Resolved</option>
+              <option value="closed">Closed</option>
+            </select>
+          </div>
+          <div class="form-group" style="margin-bottom: 0;">
+            <label class="form-label" for="replyTicketCost">Actual Repair Cost (₱)</label>
+            <input type="number" id="replyTicketCost" class="clay-input" step="0.01" min="0" placeholder="0.00">
+          </div>
+        </div>
+
+        <div class="form-group" style="margin-bottom: 20px;">
+          <label class="form-label" for="replyTicketMessage">Owner's Response / Instructions / Remarks *</label>
+          <textarea id="replyTicketMessage" class="clay-textarea" rows="4" placeholder="Enter instructions or status update for the tenant (e.g. Technician dispatched for inspection tomorrow morning)..." required></textarea>
+        </div>
+
+        <div style="display: flex; gap: 12px;">
+          <button type="button" class="clay-btn btn-secondary" style="flex: 1; padding: 12px;" onclick="closeTicketReplyModal()">
+            Cancel
+          </button>
+          <button type="submit" id="btnSubmitTicketReply" class="clay-btn clay-btn-primary" style="flex: 1; padding: 12px;">
+            <span>Save &amp; Update Ticket</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       MODAL: RENT DUE ANNOUNCEMENT (OWNER TO TENANTS)
+       ===================================================================== -->
+  <div class="modal-backdrop" id="announcementModal">
+    <div class="clay-modal" style="max-width: 560px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+        <div>
+          <h2 style="font-size: 20px; font-weight: 800; color: #0f172a;">📢 Send Rent Due Announcement</h2>
+          <p style="font-size: 12.5px; color: var(--text-muted); margin-top: 2px;">Broadcast rental reminders and instructions to tenants via email</p>
+        </div>
+        <button type="button" class="btn-remove-file" onclick="closeAnnouncementModal()">✕</button>
+      </div>
+
+      <form id="announcementForm" onsubmit="event.preventDefault(); submitAnnouncement();">
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label class="form-label" for="announcementTitle">Announcement Title *</label>
+          <input type="text" id="announcementTitle" class="clay-input" placeholder="e.g. Monthly Rent Collection Notice - November" required>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 16px;">
+          <div class="form-group" style="margin-bottom: 0;">
+            <label class="form-label" for="announcementTargetType">Recipients *</label>
+            <select id="announcementTargetType" class="clay-select" style="width: 100%;" onchange="toggleAnnouncementUnitSelector(this.value)">
+              <option value="all">All Active Tenants</option>
+              <option value="selected">Specific Units Only</option>
+            </select>
+          </div>
+          <div class="form-group" style="margin-bottom: 0;">
+            <label class="form-label" for="announcementDueDate">Due Date</label>
+            <input type="date" id="announcementDueDate" class="clay-input">
+          </div>
+        </div>
+
+        <div class="form-group" id="announcementUnitsContainer" style="display: none; margin-bottom: 16px;">
+          <label class="form-label">Select Units</label>
+          <div style="display: flex; gap: 14px; background: var(--clay-input-bg); padding: 10px 14px; border-radius: var(--radius-md);">
+            <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; cursor: pointer;">
+              <input type="checkbox" name="announcement_units[]" value="1"> Unit 101
+            </label>
+            <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; cursor: pointer;">
+              <input type="checkbox" name="announcement_units[]" value="2"> Unit 102
+            </label>
+            <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; cursor: pointer;">
+              <input type="checkbox" name="announcement_units[]" value="3"> Unit 103
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group" style="margin-bottom: 20px;">
+          <label class="form-label" for="announcementMessage">Custom Message from Owner *</label>
+          <textarea id="announcementMessage" class="clay-textarea" rows="4" placeholder="Enter custom message to residents regarding payment schedules, accepted payment methods (GCash / Bank Transfer), and guidelines..." required></textarea>
+        </div>
+
+        <div style="display: flex; gap: 12px;">
+          <button type="button" class="clay-btn btn-secondary" style="flex: 1; padding: 12px;" onclick="closeAnnouncementModal()">
+            Cancel
+          </button>
+          <button type="submit" id="btnSubmitAnnouncement" class="clay-btn clay-btn-primary" style="flex: 1; padding: 12px;">
+            <span>Send Announcement Emails</span>
+          </button>
+        </div>
+      </form>
     </div>
   </div>
 
@@ -1652,6 +2207,80 @@ $pendingReviewCount = count($pendingReviewPayments);
 
     // List of occupied unit IDs for strict 1 account per unit limit
     let occupiedUnitIds = <?= json_encode(array_values(array_map(fn($u) => (int)$u['id'], array_filter($unitsWithTenants, fn($u) => !empty($u['tenants']))))) ?>;
+    let isSubmittingTenant = false;
+
+    function resetAddTenantModalState() {
+      isSubmittingTenant = false;
+      const submitBtn = document.getElementById('btnSubmitCreateTenant');
+      const cancelBtn = document.getElementById('btnCancelCreateTenant');
+      const statusContainer = document.getElementById('tenantCreationStatus');
+      const loadingEl = document.getElementById('tenantCreationLoading');
+      const successEl = document.getElementById('tenantCreationSuccess');
+      const errorEl = document.getElementById('tenantCreationError');
+
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.classList.remove('btn-loading-state');
+        submitBtn.innerHTML = 'Register &amp; Generate Credentials';
+      }
+      if (cancelBtn) {
+        cancelBtn.disabled = false;
+      }
+      if (statusContainer) statusContainer.style.display = 'none';
+      if (loadingEl) loadingEl.style.display = 'flex';
+      if (successEl) successEl.style.display = 'none';
+      if (errorEl) errorEl.style.display = 'none';
+
+      const moveInInput = document.getElementById('newMoveInDate');
+      if (moveInInput) {
+        const todayStr = getManilaTodayStr();
+        moveInInput.min = todayStr;
+        moveInInput.value = todayStr;
+      }
+    }
+
+    // =========================================================================
+    // CUSTOM CLAYMORPHIC CALENDAR (ASIA/MANILA TIMEZONE & RESTRICTIONS)
+    // =========================================================================
+    function getManilaDateDetails() {
+      const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Manila',
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric'
+      });
+      const parts = formatter.formatToParts(new Date());
+      let year = 2026, month = 10, day = 31;
+      for (const p of parts) {
+        if (p.type === 'year') year = parseInt(p.value, 10);
+        if (p.type === 'month') month = parseInt(p.value, 10);
+        if (p.type === 'day') day = parseInt(p.value, 10);
+      }
+      const yyyy = year;
+      const mm = String(month).padStart(2, '0');
+      const dd = String(day).padStart(2, '0');
+      return {
+        year,
+        month, // 1..12
+        day,
+        isoString: `${yyyy}-${mm}-${dd}`
+      };
+    }
+
+    function getManilaTodayStr() {
+      return getManilaDateDetails().isoString;
+    }
+
+    function initMoveInDatePicker() {
+      const moveInInput = document.getElementById('newMoveInDate');
+      if (moveInInput) {
+        const todayStr = getManilaTodayStr();
+        moveInInput.min = todayStr;
+        if (!moveInInput.value || moveInInput.value < todayStr) {
+          moveInInput.value = todayStr;
+        }
+      }
+    }
 
     // Modal Control
     function openAddTenantModal(preselectedUnitId = null) {
@@ -1664,11 +2293,16 @@ $pendingReviewCount = count($pendingReviewPayments);
         const sel = document.getElementById('newUnitId');
         if (sel) sel.value = preselectedUnitId;
       }
+      resetAddTenantModalState();
+      initMoveInDatePicker();
       calculateTotalOccupants();
       document.getElementById('addTenantModal').classList.add('open');
     }
+
     function closeAddTenantModal() {
+      if (isSubmittingTenant) return; // Prevent closing during active processing
       document.getElementById('addTenantModal').classList.remove('open');
+      resetAddTenantModalState();
     }
 
     // Auto-Calculate Occupants (Vanilla JS)
@@ -1700,19 +2334,63 @@ $pendingReviewCount = count($pendingReviewPayments);
       kidsEl.addEventListener('keyup', calculateTotalOccupants);
     }
 
-    // Handle Tenant Creation with Auto-Generated Credentials
+    // Handle Tenant Creation with Auto-Generated Credentials & Animated Loading State
     let currentGeneratedCreds = null;
     document.getElementById('createTenantForm').addEventListener('submit', async (e) => {
       e.preventDefault();
+      if (isSubmittingTenant) return;
+
       const unitId = parseInt(document.getElementById('newUnitId').value, 10);
       if (occupiedUnitIds.includes(unitId)) {
         showToast("This unit is already occupied and has an existing tenant account. Only one tenant account is allowed per unit.", "error");
         return;
       }
+
+      const moveInVal = document.getElementById('newMoveInDate') ? document.getElementById('newMoveInDate').value.trim() : '';
+      if (!moveInVal) {
+        showToast("Date of Moving In is required.", "error");
+        return;
+      }
+
+      const manilaToday = getManilaTodayStr();
+      if (moveInVal < manilaToday) {
+        showToast("Invalid moving-in date. Please select today or a future date.", "error");
+        resetAddTenantModalState();
+        return;
+      }
+
+      // 1. Immediately disable buttons and display loading animation
+      isSubmittingTenant = true;
+      const submitBtn = document.getElementById('btnSubmitCreateTenant');
+      const cancelBtn = document.getElementById('btnCancelCreateTenant');
+      const statusContainer = document.getElementById('tenantCreationStatus');
+      const loadingEl = document.getElementById('tenantCreationLoading');
+      const successEl = document.getElementById('tenantCreationSuccess');
+      const errorEl = document.getElementById('tenantCreationError');
+
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.classList.add('btn-loading-state');
+        submitBtn.innerHTML = '<span class="clay-spinner" style="width: 15px; height: 15px; border-width: 2px; margin-right: 8px; vertical-align: middle;"></span>Creating Account...';
+      }
+      if (cancelBtn) {
+        cancelBtn.disabled = true;
+      }
+
+      if (statusContainer) {
+        statusContainer.style.display = 'block';
+        statusContainer.style.background = '#eef2ff';
+        statusContainer.style.border = '1px solid #c7d2fe';
+      }
+      if (loadingEl) loadingEl.style.display = 'flex';
+      if (successEl) successEl.style.display = 'none';
+      if (errorEl) errorEl.style.display = 'none';
+
       const payload = {
         action: 'create',
         unit_id: unitId,
         name: document.getElementById('newName').value.trim(),
+        move_in_date: moveInVal,
         birthday: document.getElementById('newBirthday').value,
         email: document.getElementById('newEmail').value.trim(),
         phone: document.getElementById('newPhone').value.trim(),
@@ -1730,26 +2408,109 @@ $pendingReviewCount = count($pendingReviewPayments);
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
-        const result = await res.json();
+
+        if (res.status === 403) {
+          throw new Error('Your session has expired. Please refresh the page and sign in as Admin again.');
+        }
+        if (res.status === 504 || res.status === 408) {
+          throw new Error('The request timed out. Please check your network and Gmail SMTP connection.');
+        }
+
+        let result = null;
+        const resText = await res.text();
+        try {
+          result = JSON.parse(resText);
+        } catch (jsonErr) {
+          const cleanErr = resText.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+          throw new Error(cleanErr.substring(0, 150) || 'Server returned invalid response format.');
+        }
+
         if (res.ok && result.status === 'success') {
-          showToast(result.message);
-          closeAddTenantModal();
-          document.getElementById('createTenantForm').reset();
-          calculateTotalOccupants();
-          
-          if (result.credentials) {
-            result.credentials.unit_id = unitId;
-            showCredentialsModal(result.credentials);
-          } else {
-            setTimeout(() => {
-              window.location.href = `admin_dashboard.php?section=sectionDirectory&unit_id=${unitId}`;
-            }, 1000);
+          // Smooth transition: hide spinner, display success message
+          if (loadingEl) loadingEl.style.display = 'none';
+          if (successEl) {
+            successEl.style.display = 'flex';
+            const sText = document.getElementById('tenantCreationSuccessText');
+            if (sText) {
+              sText.textContent = result.message || "Tenant account created successfully! Account details have been sent to the tenant's email address.";
+            }
           }
+          if (statusContainer) {
+            statusContainer.style.background = '#ecfdf5';
+            statusContainer.style.border = '1px solid #a7f3d0';
+          }
+          showToast(result.message || "Tenant account created successfully! Account details have been sent to the tenant's email address.", "success");
+
+          // Transition delay so user experiences the success feedback
+          setTimeout(() => {
+            isSubmittingTenant = false;
+            closeAddTenantModal();
+            document.getElementById('createTenantForm').reset();
+            calculateTotalOccupants();
+
+            if (result.credentials) {
+              result.credentials.unit_id = unitId;
+              showCredentialsModal(result.credentials);
+            } else {
+              window.location.href = `admin_dashboard.php?section=sectionDirectory&unit_id=${unitId}`;
+            }
+          }, 900);
+
         } else {
+          // Re-enable and show error feedback
+          isSubmittingTenant = false;
+          if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.classList.remove('btn-loading-state');
+            submitBtn.innerHTML = 'Register &amp; Generate Credentials';
+          }
+          if (cancelBtn) {
+            cancelBtn.disabled = false;
+          }
+          if (loadingEl) loadingEl.style.display = 'none';
+          if (errorEl) {
+            errorEl.style.display = 'flex';
+            const eText = document.getElementById('tenantCreationErrorText');
+            if (eText) {
+              eText.textContent = result.message || 'Error creating tenant account.';
+            }
+          }
+          if (statusContainer) {
+            statusContainer.style.background = '#fef2f2';
+            statusContainer.style.border = '1px solid #fecaca';
+          }
           showToast(result.message || 'Error creating tenant', 'error');
         }
       } catch (err) {
-        showToast('Network error creating tenant', 'error');
+        console.error('[Tenant Creation Network/Server Error]:', err);
+        isSubmittingTenant = false;
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.classList.remove('btn-loading-state');
+          submitBtn.innerHTML = 'Register &amp; Generate Credentials';
+        }
+        if (cancelBtn) {
+          cancelBtn.disabled = false;
+        }
+        if (loadingEl) loadingEl.style.display = 'none';
+        if (errorEl) {
+          errorEl.style.display = 'flex';
+          const eText = document.getElementById('tenantCreationErrorText');
+          if (eText) {
+            let userMsg = err.message || 'Network or server error creating tenant account.';
+            if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+              userMsg = 'Network disconnected. Please check your internet connection and try again.';
+            } else if (userMsg.toLowerCase().includes('failed to fetch') || userMsg.toLowerCase().includes('networkerror') || userMsg.toLowerCase().includes('load failed')) {
+              userMsg = 'Cannot reach server. Please ensure XAMPP (Apache and MySQL) is active and your network connection is stable.';
+            }
+            eText.textContent = userMsg;
+          }
+        }
+        if (statusContainer) {
+          statusContainer.style.background = '#fef2f2';
+          statusContainer.style.border = '1px solid #fecaca';
+        }
+        showToast(err.message || 'Network error creating tenant', 'error');
       }
     });
 
@@ -1833,8 +2594,8 @@ $pendingReviewCount = count($pendingReviewPayments);
       document.getElementById('tdKidsCount').textContent = kidsVal;
 
       // Personal details
-      document.getElementById('tdBirthday').textContent = t.birthday ? new Date(t.birthday).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'N/A';
-      document.getElementById('tdMoveIn').textContent = t.move_in_date ? new Date(t.move_in_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '2025';
+      document.getElementById('tdBirthday').textContent = t.birthday ? new Date(t.birthday.includes('T') ? t.birthday : t.birthday + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'N/A';
+      document.getElementById('tdMoveIn').textContent = t.move_in_date ? new Date(t.move_in_date.includes('T') ? t.move_in_date : t.move_in_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'N/A';
       document.getElementById('tdEmail').textContent = t.email || 'N/A';
       document.getElementById('tdPhone').textContent = t.phone || 'N/A';
 
@@ -1944,25 +2705,47 @@ $pendingReviewCount = count($pendingReviewPayments);
     // exactly where they are (inside the specific unit folder).
     // It strictly DOES NOT redirect them back to the main Landlord Dashboard.
     // =========================================================================
+    let isDeletingTenant = false;
+
     async function deleteTenantAccount(tenantId, tenantName, unitNumber, unitId = null) {
-      if (!confirm(`Are you sure you want to delete the account for ${tenantName} (${unitNumber})? This will remove their credentials as they have moved out.`)) {
+      if (isDeletingTenant) return;
+
+      // 1. Exact confirmation dialog required by prompt
+      const confirmed = confirm("Are you sure you want to delete this tenant account? This action may affect associated records.");
+      if (!confirmed) {
         return;
+      }
+
+      isDeletingTenant = true;
+      const delBtn = document.getElementById('tdBtnDelete');
+      const origBtnContent = delBtn ? delBtn.innerHTML : 'Delete Account';
+
+      // 2. Display loading state & disable Delete button
+      if (delBtn) {
+        delBtn.disabled = true;
+        delBtn.style.opacity = '0.75';
+        delBtn.style.cursor = 'not-allowed';
+        delBtn.innerHTML = `
+          <span class="clay-spinner" style="width: 15px; height: 15px; border-width: 2px; vertical-align: middle; margin-right: 6px;"></span>
+          <span>Deleting account, please wait...</span>
+        `;
       }
 
       try {
         const res = await fetch('api/tenant_directory_api.php', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'delete', tenant_id: tenantId })
+          body: JSON.stringify({ action: 'delete', tenant_id: parseInt(tenantId, 10) })
         });
         const result = await res.json();
+
         if (res.ok && result.status === 'success') {
-          showToast(result.message);
+          showToast(result.message || 'Tenant account deleted successfully.');
           closeTenantDetailsModal();
 
           const resolvedUnitId = unitId || result.unit_id;
 
-          // Smoothly remove summary row from the DOM while remaining in unit folder
+          // 5. Smoothly remove summary row from the DOM while remaining in unit folder
           const row = document.getElementById(`tenant-row-${tenantId}`);
           if (row) {
             row.style.transition = 'all 0.3s ease';
@@ -1974,18 +2757,40 @@ $pendingReviewCount = count($pendingReviewPayments);
             }, 300);
           } else {
             // Stay inside the unit folder
-            window.location.href = `admin_dashboard.php?section=sectionDirectory&unit_id=${resolvedUnitId}`;
+            setTimeout(() => {
+              window.location.href = `admin_dashboard.php?section=sectionDirectory&unit_id=${resolvedUnitId}`;
+            }, 800);
           }
         } else {
-          showToast(result.message || 'Error deleting tenant', 'error');
+          showToast(result.message || 'Error deleting tenant account.', 'error');
         }
       } catch (e) {
-        showToast('Network error deleting tenant', 'error');
+        showToast('Network error while deleting tenant account. Please try again.', 'error');
+      } finally {
+        isDeletingTenant = false;
+        if (delBtn) {
+          delBtn.disabled = false;
+          delBtn.style.opacity = '1';
+          delBtn.style.cursor = 'pointer';
+          delBtn.innerHTML = origBtnContent;
+        }
       }
     }
 
     // Restore active section, unit folder, or profile tab on page load
     document.addEventListener('DOMContentLoaded', () => {
+      initMoveInDatePicker();
+
+      const moveInInput = document.getElementById('newMoveInDate');
+      if (moveInInput) {
+        moveInInput.addEventListener('change', function() {
+          const todayStr = getManilaTodayStr();
+          if (this.value && this.value < todayStr) {
+            showToast("Invalid moving-in date. Please select today or a future date.", "error");
+            this.value = todayStr;
+          }
+        });
+      }
       const urlParams = new URLSearchParams(window.location.search);
       const targetSection = urlParams.get('section');
       const targetUnitId = urlParams.get('unit_id');
@@ -2034,46 +2839,518 @@ $pendingReviewCount = count($pendingReviewPayments);
       }
     }
 
-    // Payment Review Modal Controls
-    function openReviewModal(paymentId, tenantName, unitNumber, billingCycle, amountPaid, receiptFilename, defaultDecision = '') {
-      document.getElementById('reviewPaymentId').value = paymentId;
-      document.getElementById('reviewTenantName').textContent = tenantName;
-      document.getElementById('reviewUnitNumber').textContent = unitNumber;
-      document.getElementById('reviewBillingCycle').textContent = billingCycle;
-      document.getElementById('reviewAmountPaid').textContent = '₱' + amountPaid;
+    // Maintenance Ticket Detailed Inspection & Reply Modal
+    function openTicketDetailsModal(tk) {
+      if (!tk) return;
+      document.getElementById('replyTicketId').value = tk.id;
+      document.getElementById('replyTicketIdLabel').textContent = '#MT-' + String(tk.id).padStart(4, '0');
+      document.getElementById('replyTicketTitle').textContent = tk.title || 'Maintenance Request';
       
-      const proofLink = document.getElementById('reviewProofLink');
-      const proofContainer = document.getElementById('reviewProofContainer');
-      if (receiptFilename && receiptFilename.trim() !== '') {
-        proofLink.href = 'uploads/receipts/' + encodeURIComponent(receiptFilename);
-        proofLink.style.display = 'inline-flex';
-        proofLink.innerHTML = '📄 Inspect Uploaded Receipt (' + receiptFilename + ')';
-      } else {
-        proofLink.style.display = 'none';
-        proofContainer.innerHTML = '<span style="font-size: 13px; color: var(--text-muted);">No receipt file uploaded by tenant.</span>';
+      const unitBadge = document.getElementById('replyTicketUnitBadge');
+      if (unitBadge) unitBadge.textContent = tk.unit_number || 'Unit';
+
+      const catBadge = document.getElementById('replyTicketCatBadge');
+      if (catBadge) {
+        catBadge.textContent = tk.category || 'General';
+        catBadge.className = 'clay-badge badge-' + String(tk.category || 'general').toLowerCase();
       }
 
-      const notesField = document.getElementById('reviewNotes');
+      const prioBadge = document.getElementById('replyTicketPrioBadge');
+      if (prioBadge) {
+        prioBadge.textContent = String(tk.priority || 'medium').toUpperCase();
+        prioBadge.className = 'clay-badge badge-' + String(tk.priority || 'medium').toLowerCase();
+      }
+
+      const statusBadge = document.getElementById('replyTicketStatusBadge');
+      if (statusBadge) {
+        statusBadge.textContent = String(tk.status || 'open').toUpperCase();
+        statusBadge.className = 'clay-badge badge-' + String(tk.status || 'open').toLowerCase();
+      }
+
+      document.getElementById('replyTicketTenant').textContent = tk.tenant_name || '-';
+      document.getElementById('replyTicketUnit').textContent = tk.unit_number || '-';
+      document.getElementById('replyTicketEmail').textContent = tk.tenant_email || 'Not on file';
+      document.getElementById('replyTicketPhone').textContent = tk.tenant_phone || 'Not on file';
+
+      let dateSub = '-';
+      if (tk.created_at) {
+        dateSub = new Date(tk.created_at.replace(' ', 'T')).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      }
+      document.getElementById('replyTicketDateSubmitted').textContent = dateSub;
+
+      let dateRes = 'In progress / Pending';
+      if (tk.resolved_at) {
+        dateRes = new Date(tk.resolved_at.replace(' ', 'T')).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      }
+      document.getElementById('replyTicketDateResolved').textContent = dateRes;
+
+      document.getElementById('replyTicketDescription').textContent = tk.description || 'No additional description provided.';
+      document.getElementById('replyTicketStatus').value = tk.status || 'open';
+      document.getElementById('replyTicketCost').value = (tk.actual_cost && parseFloat(tk.actual_cost) > 0) ? parseFloat(tk.actual_cost).toFixed(2) : '';
+      document.getElementById('replyTicketMessage').value = tk.resolution_notes || '';
+
+      // Photos container
+      const photosSec = document.getElementById('replyTicketPhotosSection');
+      const photosContainer = document.getElementById('replyTicketPhotosContainer');
+      if (photosSec && photosContainer) {
+        photosContainer.innerHTML = '';
+        if (tk.photo_path && tk.photo_path.trim() !== '') {
+          const pList = tk.photo_path.split(',');
+          pList.forEach((pItem, idx) => {
+            pItem = pItem.trim();
+            if (!pItem) return;
+            const a = document.createElement('a');
+            a.href = pItem;
+            a.target = '_blank';
+            a.className = 'btn-inspect-proof';
+            a.style.cssText = 'display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; font-size: 12px; border-radius: 8px; text-decoration: none;';
+            a.innerHTML = '📷 View Attached Photo ' + (pList.length > 1 ? (idx + 1) : '');
+            photosContainer.appendChild(a);
+          });
+          photosSec.style.display = 'block';
+        } else {
+          photosSec.style.display = 'none';
+        }
+      }
+
+      document.getElementById('ticketReplyModal').classList.add('active');
+    }
+
+    // Backward compatibility helper
+    function openTicketReplyModal(id, title, tenant, unit, status, cost, notes) {
+      openTicketDetailsModal({
+        id: id,
+        title: title,
+        tenant_name: tenant,
+        unit_number: unit,
+        status: status,
+        actual_cost: cost,
+        resolution_notes: notes,
+        category: 'General',
+        priority: 'medium',
+        description: notes || title
+      });
+    }
+
+    function closeTicketReplyModal() {
+      document.getElementById('ticketReplyModal').classList.remove('active');
+    }
+
+    async function submitTicketReply() {
+      const btn = document.getElementById('btnSubmitTicketReply');
+      const id = document.getElementById('replyTicketId').value;
+      const status = document.getElementById('replyTicketStatus').value;
+      const cost = document.getElementById('replyTicketCost').value;
+      const reply = document.getElementById('replyTicketMessage').value.trim();
+
+      if (!reply) {
+        showToast('Please enter an owner response or status update note.', 'error');
+        return;
+      }
+
+      const origText = btn.innerHTML;
+      btn.innerHTML = 'Saving...';
+      btn.disabled = true;
+
+      try {
+        const res = await fetch('api/ticket_api.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'reply_ticket',
+            ticket_id: parseInt(id, 10),
+            status: status,
+            actual_cost: parseFloat(cost) || 0,
+            reply: reply
+          })
+        });
+        const result = await res.json();
+        if (result.status === 'success') {
+          showToast(result.message);
+          closeTicketReplyModal();
+
+          // Update row in DOM in-place without page reload
+          const row = document.getElementById('ticket-row-' + id);
+          if (row) {
+            const statusSelect = row.querySelector('select');
+            if (statusSelect) statusSelect.value = status;
+            const costInput = row.querySelector('input[type="number"]');
+            if (costInput && cost) costInput.value = parseFloat(cost).toFixed(2);
+          }
+        } else {
+          showToast(result.message || 'Failed to send reply', 'error');
+        }
+      } catch (err) {
+        showToast('Error communicating with ticket service', 'error');
+      } finally {
+        btn.innerHTML = origText;
+        btn.disabled = false;
+      }
+    }
+
+    // Rent Due Announcement Modal Controls
+    function openAnnouncementModal() {
+      document.getElementById('announcementForm').reset();
+      document.getElementById('announcementUnitsContainer').style.display = 'none';
+      document.getElementById('announcementModal').classList.add('active');
+    }
+
+    function closeAnnouncementModal() {
+      document.getElementById('announcementModal').classList.remove('active');
+    }
+
+    function toggleAnnouncementUnitSelector(val) {
+      const container = document.getElementById('announcementUnitsContainer');
+      if (container) {
+        container.style.display = (val === 'selected') ? 'block' : 'none';
+      }
+    }
+
+    async function submitAnnouncement() {
+      const btn = document.getElementById('btnSubmitAnnouncement');
+      const title = document.getElementById('announcementTitle').value.trim();
+      const dueDate = document.getElementById('announcementDueDate').value;
+      const targetType = document.getElementById('announcementTargetType').value;
+      const message = document.getElementById('announcementMessage').value.trim();
+
+      if (!title || !message) {
+        showToast('Please fill in title and message.', 'error');
+        return;
+      }
+
+      let selectedUnits = [];
+      if (targetType === 'selected') {
+        const checked = document.querySelectorAll('input[name="announcement_units[]"]:checked');
+        checked.forEach(cb => selectedUnits.push(parseInt(cb.value)));
+        if (selectedUnits.length === 0) {
+          showToast('Please select at least one unit.', 'error');
+          return;
+        }
+      }
+
+      const origText = btn.innerHTML;
+      btn.innerHTML = 'Sending Emails...';
+      btn.disabled = true;
+
+      try {
+        const res = await fetch('api/announcement_api.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: title,
+            due_date: dueDate,
+            target_type: targetType,
+            target_units: selectedUnits,
+            message: message
+          })
+        });
+        const result = await res.json();
+        if (result.status === 'success') {
+          showToast(result.message);
+          closeAnnouncementModal();
+        } else {
+          showToast(result.message || 'Failed to send announcement', 'error');
+        }
+      } catch (e) {
+        showToast('Network error while sending announcement', 'error');
+      } finally {
+        btn.innerHTML = origText;
+        btn.disabled = false;
+      }
+    }
+
+    // =========================================================================
+    // PAYMENT VERIFICATION & AUDIT MODAL CONTROLS & FILTERING
+    // =========================================================================
+    const allPaymentsData = <?= json_encode($payments) ?>;
+    let isPaymentVerificationInProgress = false;
+    let currentViewingPayment = null;
+
+    // Filter payments ledger table by Month and Year
+    function applyPaymentFilters() {
+      const selectedMonth = document.getElementById('paymentFilterMonth').value;
+      const selectedYear = document.getElementById('paymentFilterYear').value;
+      const rows = document.querySelectorAll('.payment-record-row');
+      let visibleCount = 0;
+
+      rows.forEach(row => {
+        const rowMonth = row.getAttribute('data-month');
+        const rowYear = row.getAttribute('data-year');
+
+        const monthMatch = (selectedMonth === 'all') || (rowMonth === selectedMonth);
+        const yearMatch = (selectedYear === 'all') || (rowYear === selectedYear);
+
+        if (monthMatch && yearMatch) {
+          row.style.display = '';
+          visibleCount++;
+        } else {
+          row.style.display = 'none';
+        }
+      });
+
+      const emptyRow = document.getElementById('paymentNoFilterResultsRow');
+      if (emptyRow) {
+        emptyRow.style.display = (visibleCount === 0 && rows.length > 0) ? '' : 'none';
+      }
+
+      const badge = document.getElementById('paymentFilterCountBadge');
+      if (badge) {
+        badge.textContent = `Showing ${visibleCount} of ${rows.length} Records`;
+      }
+    }
+
+    // Reset month & year filters to 'all'
+    function resetPaymentFilters() {
+      const monthSelect = document.getElementById('paymentFilterMonth');
+      const yearSelect = document.getElementById('paymentFilterYear');
+      if (monthSelect) monthSelect.value = 'all';
+      if (yearSelect) yearSelect.value = 'all';
+      applyPaymentFilters();
+    }
+
+    // Open Comprehensive Payment Details & Verification Modal (Sections A, B, C)
+    function openPaymentDetailsModal(p, defaultDecision = '') {
+      if (!p) return;
+      currentViewingPayment = p;
+      isPaymentVerificationInProgress = false;
+
+      document.getElementById('pdPaymentId').value = p.id;
+      document.getElementById('reviewPaymentId').value = p.id;
+
+      // Section A: Billing Information
+      const payTypeElem = document.getElementById('pdPaymentType');
+      if (payTypeElem) {
+        payTypeElem.textContent = p.payment_type || 'Rent';
+        payTypeElem.style.color = (p.payment_type === 'Advance Deposit') ? '#6d28d9' : '#0369a1';
+      }
+
+      document.getElementById('pdTenantName').textContent = p.tenant_name || 'Resident';
+      document.getElementById('pdUnitNumber').textContent = p.unit_number || ('Unit ' + (p.unit_id || ''));
+
+      if (p.billing_cycle) {
+        const bDate = new Date(p.billing_cycle.includes('T') ? p.billing_cycle : p.billing_cycle + 'T00:00:00');
+        document.getElementById('pdBillingMonth').textContent = bDate.toLocaleDateString('en-US', { month: 'long' });
+        document.getElementById('pdBillingYear').textContent = bDate.getFullYear();
+      } else {
+        document.getElementById('pdBillingMonth').innerHTML = '<span style="color: #92400e; font-style: italic;">To be assigned</span>';
+        document.getElementById('pdBillingYear').innerHTML = '<span style="color: #92400e; font-style: italic;">To be assigned</span>';
+      }
+
+      if (p.move_in_date) {
+        const mDate = new Date(p.move_in_date.includes('T') ? p.move_in_date : p.move_in_date + 'T00:00:00');
+        document.getElementById('pdMoveInDate').textContent = mDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      } else {
+        document.getElementById('pdMoveInDate').innerHTML = '<span style="color: var(--text-light);">N/A</span>';
+      }
+
+      if (p.due_date) {
+        const dDate = new Date(p.due_date.includes('T') ? p.due_date : p.due_date + 'T00:00:00');
+        document.getElementById('pdDueDate').textContent = dDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      } else {
+        document.getElementById('pdDueDate').innerHTML = '<span style="color: #92400e; font-style: italic;">To be assigned</span>';
+      }
+
+      // Financials
+      const amtDue = p.amount_due !== null ? parseFloat(p.amount_due) : null;
+      const amtPaid = parseFloat(p.amount_paid || 0);
+
+      document.getElementById('pdAmountDue').textContent = (amtDue !== null && amtDue > 0)
+        ? '₱' + amtDue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        : 'Not yet configured';
+
+      document.getElementById('pdAmountPaid').textContent = '₱' + amtPaid.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+      const remBalElem = document.getElementById('pdRemainingBalance');
+      if (p.status === 'approved') {
+        remBalElem.textContent = '₱0.00';
+        remBalElem.style.color = '#047857';
+      } else if (amtDue === null || amtDue === 0) {
+        remBalElem.textContent = '—';
+        remBalElem.style.color = 'var(--text-muted)';
+      } else {
+        const remaining = Math.max(0, amtDue - amtPaid);
+        remBalElem.textContent = '₱' + remaining.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        remBalElem.style.color = remaining > 0 ? '#dc2626' : '#047857';
+      }
+
+      // Status Badge
+      const statusBadge = document.getElementById('pdStatusBadge');
+      if (statusBadge) {
+        if (p.status === 'pending_setup') {
+          statusBadge.className = 'clay-badge';
+          statusBadge.style.cssText = 'background: #fef3c7; color: #92400e; font-weight: 800; border: 1px solid rgba(245, 158, 11, 0.35); font-size: 11px; padding: 4px 10px;';
+          statusBadge.textContent = 'AWAITING CONFIGURATION';
+        } else if (p.status === 'unpaid') {
+          statusBadge.className = 'clay-badge';
+          statusBadge.style.cssText = 'background: #fee2e2; color: #991b1b; font-weight: 800; border: 1px solid rgba(239, 68, 68, 0.35); font-size: 11px; padding: 4px 10px;';
+          statusBadge.textContent = 'UNPAID';
+        } else if (p.status === 'pending') {
+          statusBadge.className = 'clay-badge badge-pending';
+          statusBadge.style.cssText = '';
+          statusBadge.textContent = 'PENDING REVIEW';
+        } else if (p.status === 'approved') {
+          statusBadge.className = 'clay-badge badge-approved';
+          statusBadge.style.cssText = '';
+          statusBadge.textContent = 'APPROVED';
+        } else if (p.status === 'rejected') {
+          statusBadge.className = 'clay-badge badge-rejected';
+          statusBadge.style.cssText = '';
+          statusBadge.textContent = 'REJECTED';
+        } else {
+          statusBadge.className = 'clay-badge badge-' + String(p.status || '').toLowerCase();
+          statusBadge.style.cssText = '';
+          statusBadge.textContent = String(p.status || '').toUpperCase();
+        }
+      }
+
+      // Section B: Payment Information
+      document.getElementById('pdPaymentMethod').textContent = p.payment_method || 'GCash / Bank Transfer';
+
+      let payDateStr = 'Pending submission';
+      if (p.payment_date) {
+        const pdDate = new Date(p.payment_date.includes('T') ? p.payment_date : p.payment_date + 'T00:00:00');
+        payDateStr = pdDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      } else if (p.created_at && p.status !== 'pending_setup') {
+        payDateStr = new Date(p.created_at.replace(' ', 'T')).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      }
+      document.getElementById('pdPaymentDate').textContent = payDateStr;
+
+      // Reference Number
+      document.getElementById('pdRefNumber').textContent = p.reference_number || ('PAY-' + String(p.id).padStart(5, '0'));
+
+      // Tenant Remarks
+      const tenantRemarksElem = document.getElementById('pdTenantRemarks');
+      if (tenantRemarksElem) {
+        tenantRemarksElem.textContent = p.tenant_remarks || (p.verification_notes && p.status === 'pending' ? p.verification_notes : 'None provided');
+      }
+
+      // Receipt Proof
+      const receiptInspectBtn = document.getElementById('pdReceiptInspectBtn');
+      const receiptContent = document.getElementById('pdReceiptContent');
+      const noReceiptMsg = document.getElementById('pdNoReceiptMsg');
+      const previewBox = document.getElementById('pdReceiptPreviewBox');
+      const previewImage = document.getElementById('pdReceiptImage');
+
+      if (p.receipt_filename && p.receipt_filename.trim() !== '') {
+        const fileUrl = 'uploads/receipts/' + encodeURIComponent(p.receipt_filename);
+        receiptInspectBtn.href = fileUrl;
+        receiptInspectBtn.innerHTML = '📄 Inspect Uploaded Proof (' + p.receipt_filename + ')';
+        receiptContent.style.display = 'block';
+        noReceiptMsg.style.display = 'none';
+
+        const ext = p.receipt_filename.split('.').pop().toLowerCase();
+        if (['png', 'jpg', 'jpeg', 'webp'].includes(ext)) {
+          previewImage.src = fileUrl;
+          previewBox.style.display = 'block';
+        } else {
+          previewBox.style.display = 'none';
+        }
+      } else {
+        receiptContent.style.display = 'none';
+        noReceiptMsg.style.display = 'block';
+        previewBox.style.display = 'none';
+      }
+
+      // Section C: Actions & Remarks
+      const notesField = document.getElementById('pdVerificationNotes');
+      const notesReqLabel = document.getElementById('pdNotesRequiredLabel');
+      const setupRow = document.getElementById('pdSetupActionRow');
+      const actionRow = document.getElementById('pdActionButtonsRow');
+      const processingIndicator = document.getElementById('pdProcessingIndicator');
+      const verifiedMeta = document.getElementById('pdVerifiedMeta');
+
+      if (notesReqLabel) notesReqLabel.style.display = 'none';
+      if (processingIndicator) processingIndicator.style.display = 'none';
+
+      if (verifiedMeta) {
+        verifiedMeta.textContent = p.verified_at ? ((p.verified_by_landlord ? 'Verified on ' : 'Audited on ') + p.verified_at) : '';
+      }
+
       if (defaultDecision === 'approved') {
         notesField.value = 'Payment receipt verified and approved.';
       } else if (defaultDecision === 'rejected') {
         notesField.value = 'Payment proof rejected: ';
+        if (notesReqLabel) notesReqLabel.style.display = 'inline';
+      } else if (p.verification_notes) {
+        notesField.value = p.verification_notes;
       } else {
         notesField.value = '';
       }
 
-      document.getElementById('reviewPaymentModal').classList.add('open');
+      if (p.status === 'pending_setup') {
+        if (setupRow) setupRow.style.display = 'block';
+        if (actionRow) actionRow.style.display = 'none';
+        notesField.disabled = true;
+      } else {
+        if (setupRow) setupRow.style.display = 'none';
+        if (actionRow) actionRow.style.display = 'flex';
+        notesField.disabled = false;
+      }
+
+      document.getElementById('btnPdApprove').disabled = false;
+      document.getElementById('btnPdReject').disabled = false;
+
+      // Open Modal
+      document.getElementById('paymentDetailsModal').classList.add('open');
     }
 
-    function closeReviewModal() {
-      document.getElementById('reviewPaymentModal').classList.remove('open');
+    function closePaymentDetailsModal() {
+      const m = document.getElementById('paymentDetailsModal');
+      if (m) m.classList.remove('open');
     }
 
-    async function submitPaymentReview(decision) {
-      const paymentId = document.getElementById('reviewPaymentId').value;
-      const notes = document.getElementById('reviewNotes').value.trim();
+    // Trigger Configure Rent modal directly from details view
+    function triggerSetupFromModal() {
+      if (!currentViewingPayment) return;
+      closePaymentDetailsModal();
+      openConfigureRentModal(
+        currentViewingPayment.id,
+        currentViewingPayment.tenant_name,
+        currentViewingPayment.unit_number,
+        currentViewingPayment.amount_due,
+        currentViewingPayment.billing_cycle,
+        currentViewingPayment.due_date
+      );
+    }
+
+    // Handle Approve / Reject Decision with double-click protection & feedback
+    async function handlePaymentVerificationDecision(decision) {
+      if (isPaymentVerificationInProgress) return;
+
+      const paymentId = document.getElementById('pdPaymentId').value;
+      const notes = document.getElementById('pdVerificationNotes').value.trim();
 
       if (!paymentId) return;
+
+      if (decision === 'rejected') {
+        if (!notes || notes === 'Payment proof rejected:' || notes === 'Payment proof rejected: ') {
+          showToast('Please enter an explanation or reason for rejecting this payment proof.', 'error');
+          const notesField = document.getElementById('pdVerificationNotes');
+          if (notesField) {
+            notesField.focus();
+            const reqLabel = document.getElementById('pdNotesRequiredLabel');
+            if (reqLabel) reqLabel.style.display = 'inline';
+          }
+          return;
+        }
+      }
+
+      // Activate Concurrency & Double-Click Protection
+      isPaymentVerificationInProgress = true;
+      const actionRow = document.getElementById('pdActionButtonsRow');
+      const processingIndicator = document.getElementById('pdProcessingIndicator');
+      const btnApprove = document.getElementById('btnPdApprove');
+      const btnReject = document.getElementById('btnPdReject');
+
+      if (btnApprove) btnApprove.disabled = true;
+      if (btnReject) btnReject.disabled = true;
+      if (actionRow) actionRow.style.display = 'none';
+      if (processingIndicator) {
+        document.getElementById('pdProcessingText').textContent = (decision === 'approved')
+          ? 'Approving payment receipt & notifying tenant via email...'
+          : 'Rejecting payment receipt & notifying tenant via email...';
+        processingIndicator.style.display = 'flex';
+      }
 
       try {
         const res = await fetch('api/payment_api.php', {
@@ -2090,16 +3367,145 @@ $pendingReviewCount = count($pendingReviewPayments);
         const result = await res.json();
         if (res.ok && result.status === 'success') {
           showToast(result.message);
-          closeReviewModal();
-          // Universal Contextual Routing: Stay in place on Payment Verification
+          closePaymentDetailsModal();
+          setTimeout(() => {
+            window.location.href = 'admin_dashboard.php?section=sectionPayments';
+          }, 900);
+        } else {
+          showToast(result.message || 'Error updating payment status', 'error');
+          isPaymentVerificationInProgress = false;
+          if (processingIndicator) processingIndicator.style.display = 'none';
+          if (actionRow) actionRow.style.display = 'flex';
+          if (btnApprove) btnApprove.disabled = false;
+          if (btnReject) btnReject.disabled = false;
+        }
+      } catch (err) {
+        showToast('Network error verifying payment receipt', 'error');
+        isPaymentVerificationInProgress = false;
+        if (processingIndicator) processingIndicator.style.display = 'none';
+        if (actionRow) actionRow.style.display = 'flex';
+        if (btnApprove) btnApprove.disabled = false;
+        if (btnReject) btnReject.disabled = false;
+      }
+    }
+
+    // Backward Compatibility Forwarders
+    function openReviewModal(paymentId, tenantName, unitNumber, billingCycle, amountPaid, receiptFilename, defaultDecision = '') {
+      const found = allPaymentsData.find(p => p.id == paymentId);
+      if (found) {
+        openPaymentDetailsModal(found, defaultDecision);
+      } else {
+        openPaymentDetailsModal({
+          id: paymentId,
+          tenant_name: tenantName,
+          unit_number: unitNumber,
+          billing_cycle: billingCycle,
+          amount_paid: amountPaid,
+          amount_due: amountPaid,
+          receipt_filename: receiptFilename,
+          status: defaultDecision ? (defaultDecision === 'approved' ? 'approved' : 'rejected') : 'pending'
+        }, defaultDecision);
+      }
+    }
+
+    function closeReviewModal() {
+      closePaymentDetailsModal();
+    }
+
+    async function submitPaymentReview(decision) {
+      await handlePaymentVerificationDecision(decision);
+    }
+
+    // Configure Placeholder Rent Modal Controls
+    function openConfigureRentModal(paymentId, tenantName, unitNumber, currentRent, currentCycle, currentDueDate) {
+      document.getElementById('configPaymentId').value = paymentId;
+      document.getElementById('configTenantName').textContent = tenantName || '-';
+      document.getElementById('configUnitNumber').textContent = unitNumber || '-';
+      
+      const rentInput = document.getElementById('configMonthlyRent');
+      if (currentRent && parseFloat(currentRent) > 0) {
+        rentInput.value = parseFloat(currentRent).toFixed(2);
+      } else {
+        rentInput.value = '3000.00';
+      }
+
+      const cycleInput = document.getElementById('configBillingCycle');
+      if (currentCycle && currentCycle.length >= 7) {
+        cycleInput.value = currentCycle.substring(0, 7);
+      } else {
+        const now = new Date();
+        const yyyy = now.getFullYear();
+        const mm = String(now.getMonth() + 1).padStart(2, '0');
+        cycleInput.value = `${yyyy}-${mm}`;
+      }
+
+      const dueDateInput = document.getElementById('configDueDate');
+      if (currentDueDate && currentDueDate.length >= 10) {
+        dueDateInput.value = currentDueDate;
+      } else {
+        const valMonth = cycleInput.value;
+        dueDateInput.value = `${valMonth}-05`;
+      }
+
+      // Auto-update due date when billing month changes if left default
+      cycleInput.onchange = function() {
+        if (cycleInput.value) {
+          dueDateInput.value = `${cycleInput.value}-05`;
+        }
+      };
+
+      document.getElementById('configureRentModal').classList.add('open');
+    }
+
+    function closeConfigureRentModal() {
+      document.getElementById('configureRentModal').classList.remove('open');
+    }
+
+    async function submitConfigureRent() {
+      const paymentId = document.getElementById('configPaymentId').value;
+      const rentAmount = document.getElementById('configMonthlyRent').value;
+      const cycle = document.getElementById('configBillingCycle').value;
+      const dueDate = document.getElementById('configDueDate').value;
+
+      if (!paymentId) return;
+      if (!rentAmount || parseFloat(rentAmount) <= 0) {
+        showToast('Please enter a valid monthly rent amount greater than 0', 'error');
+        return;
+      }
+      if (!cycle) {
+        showToast('Please select a billing month', 'error');
+        return;
+      }
+      if (!dueDate) {
+        showToast('Please select a payment due date', 'error');
+        return;
+      }
+
+      try {
+        const res = await fetch('api/payment_api.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'configure_rent',
+            payment_id: parseInt(paymentId, 10),
+            monthly_rent: parseFloat(rentAmount),
+            billing_cycle: cycle + '-01',
+            due_date: dueDate
+          })
+        });
+
+        const result = await res.json();
+        if (res.ok && result.status === 'success') {
+          showToast(result.message);
+          closeConfigureRentModal();
           setTimeout(() => {
             window.location.href = 'admin_dashboard.php?section=sectionPayments';
           }, 1000);
         } else {
-          showToast(result.message || 'Error updating payment status', 'error');
+          showToast(result.message || 'Error configuring rent', 'error');
         }
       } catch (err) {
-        showToast('Network error verifying payment', 'error');
+        showToast('Network error configuring rent', 'error');
       }
     }
 

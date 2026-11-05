@@ -84,6 +84,15 @@ class Auth {
             header('Location: admin_dashboard.php');
             exit;
         }
+        $pdo = Database::getConnection();
+        $stmt = $pdo->prepare("SELECT is_active FROM users WHERE id = :id LIMIT 1");
+        $stmt->execute([':id' => (int)($_SESSION['user_id'] ?? 0)]);
+        $active = $stmt->fetchColumn();
+        if ($active === false || (int)$active !== 1) {
+            self::logout();
+            header('Location: login.php?msg=deactivated');
+            exit;
+        }
     }
 
     /**

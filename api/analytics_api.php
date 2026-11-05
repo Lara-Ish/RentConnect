@@ -31,12 +31,12 @@ try {
         SELECT 
             COUNT(DISTINCT u.id) AS total_units,
             (SELECT COUNT(*) FROM users WHERE role = 'tenant' AND is_active = 1) AS total_active_tenants,
-            COALESCE(SUM(p.amount_due), 0) AS total_receivables_billed,
+            COALESCE(SUM(CASE WHEN p.status != 'pending_setup' THEN p.amount_due ELSE 0 END), 0) AS total_receivables_billed,
             COALESCE(SUM(CASE WHEN p.status = 'approved' THEN p.amount_paid ELSE 0 END), 0) AS total_revenue_collected,
-            COALESCE(SUM(CASE WHEN p.status != 'approved' THEN (p.amount_due - p.amount_paid) ELSE 0 END), 0) AS total_outstanding_balance,
+            COALESCE(SUM(CASE WHEN p.status NOT IN ('approved', 'pending_setup') AND p.amount_due IS NOT NULL THEN (p.amount_due - p.amount_paid) ELSE 0 END), 0) AS total_outstanding_balance,
             CASE 
-                WHEN SUM(p.amount_due) > 0 
-                THEN ROUND((SUM(CASE WHEN p.status = 'approved' THEN p.amount_paid ELSE 0 END) / SUM(p.amount_due)) * 100, 2) 
+                WHEN SUM(CASE WHEN p.status != 'pending_setup' THEN p.amount_due ELSE 0 END) > 0 
+                THEN ROUND((SUM(CASE WHEN p.status = 'approved' THEN p.amount_paid ELSE 0 END) / SUM(CASE WHEN p.status != 'pending_setup' THEN p.amount_due ELSE 0 END)) * 100, 2) 
                 ELSE 0.00 
             END AS overall_collection_efficiency
         FROM units u
@@ -68,6 +68,7 @@ try {
                 ELSE 0.00 
             END AS collection_efficiency_percentage
         FROM payments
+        WHERE billing_cycle IS NOT NULL AND status != 'pending_setup'
         GROUP BY SUBSTR(billing_cycle, 1, 7)
         ORDER BY month_key ASC
     ");

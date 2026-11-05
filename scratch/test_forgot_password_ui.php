@@ -74,10 +74,10 @@ assertTest(
     (str_contains($cssContent, '.forgot-password-link:hover') && str_contains($cssContent, 'text-decoration: underline'))
 );
 
-// 6. UI only: No form submission / reset token logic
+// 6. Link to Forgot Password workflow
 assertTest(
-    "Forgot Password is a placeholder (no reset token form or submission)",
-    str_contains($loginContent, 'onclick="event.preventDefault();"') || str_contains($loginContent, 'href="#"')
+    "Forgot Password link targets forgot_password.php or placeholder",
+    str_contains($loginContent, 'href="forgot_password.php"') || str_contains($loginContent, 'onclick="event.preventDefault();"')
 );
 
 // 7. Verify existing authentication logic unmodified

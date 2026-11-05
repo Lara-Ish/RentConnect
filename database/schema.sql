@@ -87,12 +87,13 @@ CREATE TABLE `payments` (
     `id` INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     `tenant_id` INT UNSIGNED NOT NULL,
     `unit_id` INT UNSIGNED NOT NULL,
-    `billing_cycle` DATE NOT NULL COMMENT 'First day of billing month e.g. 2026-10-01',
-    `due_date` DATE NOT NULL,
-    `amount_due` DECIMAL(10,2) NOT NULL,
+    `payment_type` VARCHAR(50) NOT NULL DEFAULT 'Rent',
+    `billing_cycle` DATE NULL DEFAULT NULL COMMENT 'First day of billing month e.g. 2026-10-01',
+    `due_date` DATE NULL DEFAULT NULL,
+    `amount_due` DECIMAL(10,2) NULL DEFAULT NULL,
     `amount_paid` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
     `payment_date` DATE NULL,
-    `status` ENUM('pending', 'approved', 'rejected', 'overdue') NOT NULL DEFAULT 'pending',
+    `status` ENUM('pending_setup', 'unpaid', 'pending', 'approved', 'rejected', 'overdue') NOT NULL DEFAULT 'pending_setup',
     `payment_method` VARCHAR(50) DEFAULT 'GCash / Bank Transfer',
     `receipt_filename` VARCHAR(255) NULL,
     `verified_by_landlord` TINYINT(1) NOT NULL DEFAULT 0,
@@ -143,47 +144,16 @@ CREATE TABLE `maintenance_tickets` (
 -- SEED DATA: Exactly 3 Units, Exactly 1 Landlord, and Exactly 2 Active Tenants
 -- ============================================================================
 
--- 1. Exactly 3 Units (Strict layout & pricing: Unit 1 @ ₱6k, Unit 2 @ ₱8k, Unit 3 @ ₱8k)
+-- 1. Exactly 3 Units (Strict layout & pricing: ₱3,000.00 per month)
 INSERT INTO `units` (`id`, `unit_number`, `floor_level`, `bedrooms`, `bathrooms`, `monthly_rent`) VALUES
-(1, 'Unit 1', 1, 1, 1.0, 6000.00),
-(2, 'Unit 2', 1, 2, 1.0, 8000.00),
-(3, 'Unit 3', 2, 3, 1.0, 8000.00);
+(1, 'Unit 1', 1, 1, 1.0, 3000.00),
+(2, 'Unit 2', 1, 2, 1.0, 3000.00),
+(3, 'Unit 3', 2, 3, 1.0, 3000.00);
 
--- 2. Landlord (Lead Dimaculangan) & Exactly Two Active Tenants (tenant1, tenant2)
+-- 2. Landlord (Lead Dimaculangan)
 -- admin: admin123 ($2y$10$L1oJw/e9iaOxHBBWA6p0G.EEPbgJ8jKQxXLEnjzxwY0DSzno7igyO)
--- tenant1: 111111  ($2y$10$shksNt6tczNPIHdM73bUT.v5zFTIUGWVmIYcoPDG/b1Ft5YDs3NLy)
--- tenant2: 222222  ($2y$10$81lsNOUii1VyCUvd/TV1X.qdoJRMY6NeVoMDMnVhnsJ7sJq9qURG6)
 INSERT INTO `users` (`id`, `unit_id`, `username`, `name`, `email`, `password_hash`, `role`, `phone`, `birthday`, `emergency_contact`, `move_in_date`) VALUES
-(1, NULL, 'admin', 'Lead Dimaculangan', 'lead.dimaculangan@rentconnect.ph', '$2y$10$L1oJw/e9iaOxHBBWA6p0G.EEPbgJ8jKQxXLEnjzxwY0DSzno7igyO', 'landlord', '+63 917 123 4567', '1985-11-20', 'Property Management Office', '2024-01-01'),
-(2, 1, 'tenant1', 'Juan Dela Cruz', 'juan.delacruz@rentconnect.ph', '$2y$10$shksNt6tczNPIHdM73bUT.v5zFTIUGWVmIYcoPDG/b1Ft5YDs3NLy', 'tenant', '+63 918 234 5678', '1995-04-12', 'Rosa Dela Cruz (+63 919 333 4444)', '2025-06-01'),
-(3, 2, 'tenant2', 'Maria Santos', 'maria.santos@rentconnect.ph', '$2y$10$81lsNOUii1VyCUvd/TV1X.qdoJRMY6NeVoMDMnVhnsJ7sJq9qURG6', 'tenant', '+63 920 345 6789', '1998-08-23', 'Carlos Santos (+63 921 555 6666)', '2025-09-15');
-
--- 3. Historical Rent Payments for tenant1 and tenant2 (May 2026 to October 2026) in ₱
--- Demonstrates manual landlord verification workflow with pending, approved, and overdue records
-INSERT INTO `payments` (`tenant_id`, `unit_id`, `billing_cycle`, `due_date`, `amount_due`, `amount_paid`, `payment_date`, `status`, `receipt_filename`, `verified_by_landlord`, `verification_notes`, `verified_at`) VALUES
--- May 2026 (Approved)
-(2, 1, '2026-05-01', '2026-05-05', 15000.00, 15000.00, '2026-05-03', 'approved', 'receipt_may_u101.pdf', 1, 'Verified with bank statement', '2026-05-04 10:30:00'),
-(3, 2, '2026-05-01', '2026-05-05', 18000.00, 18000.00, '2026-05-04', 'approved', 'receipt_may_u102.pdf', 1, 'GCash reference matched', '2026-05-05 09:15:00'),
-
--- June 2026 (Approved)
-(2, 1, '2026-06-01', '2026-06-05', 15000.00, 15000.00, '2026-06-02', 'approved', 'receipt_jun_u101.pdf', 1, 'Verified deposit slip', '2026-06-03 14:00:00'),
-(3, 2, '2026-06-01', '2026-06-05', 18000.00, 18000.00, '2026-06-05', 'approved', 'receipt_jun_u102.pdf', 1, 'Bank transfer cleared', '2026-06-06 11:20:00'),
-
--- July 2026 (Approved)
-(2, 1, '2026-07-01', '2026-07-05', 15000.00, 15000.00, '2026-07-04', 'approved', 'receipt_jul_u101.pdf', 1, 'Verified online payment', '2026-07-05 16:45:00'),
-(3, 2, '2026-07-01', '2026-07-05', 18000.00, 18000.00, '2026-07-03', 'approved', 'receipt_jul_u102.pdf', 1, 'Verified with transaction record', '2026-07-04 13:10:00'),
-
--- August 2026 (Unit 101 approved, Unit 102 partial/rejected)
-(2, 1, '2026-08-01', '2026-08-05', 15000.00, 15000.00, '2026-08-04', 'approved', 'receipt_aug_u101.pdf', 1, 'Verified full payment', '2026-08-05 10:00:00'),
-(3, 2, '2026-08-01', '2026-08-05', 18000.00, 12000.00, '2026-08-08', 'rejected', 'receipt_aug_u102.pdf', 0, 'Partial payment only. Remaining balance of ₱6,000 required.', '2026-08-09 11:30:00'),
-
--- September 2026 (Approved)
-(2, 1, '2026-09-01', '2026-09-05', 15000.00, 15000.00, '2026-09-02', 'approved', 'receipt_sep_u101.pdf', 1, 'Verified payment slip', '2026-09-03 09:40:00'),
-(3, 2, '2026-09-01', '2026-09-05', 18000.00, 18000.00, '2026-09-04', 'approved', 'receipt_sep_u102.pdf', 1, 'Verified electronic transfer', '2026-09-05 15:00:00'),
-
--- October 2026 (Unit 101 PENDING review for landlord manual verification; Unit 102 overdue)
-(2, 1, '2026-10-01', '2026-10-05', 15000.00, 15000.00, '2026-10-03', 'pending', 'receipt_oct_u101.pdf', 0, NULL, NULL),
-(3, 2, '2026-10-01', '2026-10-05', 18000.00, 0.00, NULL, 'overdue', NULL, 0, 'No payment submitted for October cycle', NULL);
+(1, NULL, 'admin', 'Lead Dimaculangan', 'lead.dimaculangan@rentconnect.ph', '$2y$10$L1oJw/e9iaOxHBBWA6p0G.EEPbgJ8jKQxXLEnjzxwY0DSzno7igyO', 'landlord', '+63 917 123 4567', '1985-11-20', 'Property Management Office', '2024-01-01');
 
 -- ----------------------------------------------------------------------------
 -- TRIGGERS: ENFORCE STRICT 1 ACTIVE TENANT PER APARTMENT UNIT RESTRICTION
@@ -224,3 +194,86 @@ INSERT INTO `maintenance_tickets` (`tenant_id`, `unit_id`, `title`, `description
 (3, 2, 'Main Bathroom Light Switch Loose', 'Rocker switch plate cracked and sparking faintly.', 'Electrical', 'high', 'resolved', 1600.00, '2026-08-11 11:15:00', '2026-08-12 14:20:00'),
 (2, 1, 'Balcony Sliding Screen Mesh Tear', 'Screen mesh detached from upper aluminum frame.', 'Structural', 'low', 'resolved', 950.00, '2026-09-15 16:00:00', '2026-09-16 12:00:00'),
 (3, 2, 'Water Heater Breaker Trip', 'Shower heater trips breaker after 5 minutes of usage.', 'Electrical', 'high', 'in_progress', 2200.00, '2026-10-08 13:00:00', NULL);
+
+-- ----------------------------------------------------------------------------
+-- 5. PASSWORD RESETS TABLE
+-- Secure token- and 6-digit verification code-based password recovery requests.
+-- Stores cryptographically secure SHA-256 hashed codes with 5-minute expiry and rate-limiting.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `password_resets` (
+    `id` INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    `user_id` INT UNSIGNED NOT NULL,
+    `email` VARCHAR(191) NOT NULL,
+    `token_hash` VARCHAR(64) NOT NULL,
+    `ip_address` VARCHAR(45) NULL,
+    `attempts` INT UNSIGNED NOT NULL DEFAULT 0,
+    `max_attempts` INT UNSIGNED NOT NULL DEFAULT 5,
+    `expires_at` DATETIME NOT NULL,
+    `used_at` DATETIME NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX `idx_token_hash` (`token_hash`),
+    INDEX `idx_user_resets` (`user_id`, `expires_at`),
+    CONSTRAINT `fk_password_resets_user` 
+        FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) 
+        ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------------------------------------------------------
+-- 6. EMAIL LOGS TABLE
+-- Audit log of all outgoing PHPMailer deliveries & scheduled notification tracking.
+-- Never logs passwords, tokens, verification codes, or sensitive credentials.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `email_logs` (
+    `id` INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    `recipient_user_id` INT UNSIGNED NULL,
+    `recipient_email` VARCHAR(191) NOT NULL,
+    `recipient_name` VARCHAR(100) NULL,
+    `subject` VARCHAR(255) NOT NULL,
+    `template_type` VARCHAR(50) NOT NULL,
+    `reference_id` INT UNSIGNED NULL,
+    `reference_type` VARCHAR(50) NULL,
+    `status` ENUM('sent', 'failed', 'mock_sent') NOT NULL DEFAULT 'sent',
+    `error_message` TEXT NULL,
+    `sent_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX `idx_email_logs_user` (`recipient_user_id`),
+    INDEX `idx_email_dedup` (`recipient_email`, `template_type`, `reference_id`, `reference_type`),
+    INDEX `idx_sent_at` (`sent_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------------------------------------------------------
+-- 7. ANNOUNCEMENTS TABLES
+-- Owner rent due & community announcements broadcasted to all or selected tenants.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `announcements` (
+    `id` INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    `owner_id` INT UNSIGNED NOT NULL,
+    `title` VARCHAR(255) NOT NULL,
+    `message` TEXT NOT NULL,
+    `due_date` DATE NULL,
+    `target_type` ENUM('all', 'selected') NOT NULL DEFAULT 'all',
+    `recipient_count` INT UNSIGNED NOT NULL DEFAULT 0,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX `idx_owner` (`owner_id`),
+    CONSTRAINT `fk_announcements_owner` 
+        FOREIGN KEY (`owner_id`) REFERENCES `users` (`id`) 
+        ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `announcement_recipients` (
+    `id` INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    `announcement_id` INT UNSIGNED NOT NULL,
+    `tenant_id` INT UNSIGNED NOT NULL,
+    `email` VARCHAR(191) NOT NULL,
+    `status` ENUM('sent', 'failed', 'mock_sent') NOT NULL DEFAULT 'sent',
+    `error_message` TEXT NULL,
+    `sent_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX `idx_announcement` (`announcement_id`),
+    INDEX `idx_tenant` (`tenant_id`),
+    CONSTRAINT `fk_ann_rec_ann` 
+        FOREIGN KEY (`announcement_id`) REFERENCES `announcements` (`id`) 
+        ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT `fk_ann_rec_tenant` 
+        FOREIGN KEY (`tenant_id`) REFERENCES `users` (`id`) 
+        ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+

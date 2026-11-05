@@ -28,6 +28,7 @@ if (!headers_sent()) {
 require_once __DIR__ . '/config/db.php';
 require_once __DIR__ . '/config/auth.php';
 require_once __DIR__ . '/includes/verification_service.php';
+require_once __DIR__ . '/includes/notification_service.php';
 
 // 1. Enforce Tenant Authentication
 if (!Auth::check() || !Auth::isTenant()) {
@@ -131,11 +132,38 @@ if (!empty($_POST['upload_id_only'])) {
         $idFilename = sprintf('id_user%d_%s_%s.%s', $userId, $timestampStr, $randStr, $idExt);
         $dest = $uploadDir . '/' . $idFilename;
         if (move_uploaded_file($idFile['tmp_name'], $dest)) {
-            $saveIdStmt = $pdo->prepare("UPDATE users SET id_photo_filename = :fn, id_type = :id_type WHERE id = :id");
+            $saveIdStmt = $pdo->prepare("
+                UPDATE users 
+                SET id_photo_filename = :fn, 
+                    id_type = :id_type,
+                    verification_status = 'pending',
+                    id_submitted_at = NOW()
+                WHERE id = :id
+            ");
             $saveIdStmt->execute([':fn' => $idFilename, ':id_type' => $idType, ':id' => $userId]);
+
+            if (isset($_SESSION['user'])) {
+                $_SESSION['user']['id_photo_filename'] = $idFilename;
+                $_SESSION['user']['id_type'] = $idType;
+                $_SESSION['user']['verification_status'] = 'pending';
+            }
+            $_SESSION['verification_status'] = 'pending';
+
+            // In-app notification for landlord
+            NotificationService::notifyLandlords(
+                $pdo,
+                'account',
+                'ID Verification Submitted',
+                "Tenant {$accountUser['name']} submitted a {$idType} photo for verification.",
+                'sectionDirectory',
+                $userId,
+                'id_verification_submitted',
+                false
+            );
+
             sendFaceJsonResponse(200, [
                 'status' => 'success',
-                'message' => 'ID photo stored on server.',
+                'message' => 'ID photo submitted successfully and is now under landlord review.',
                 'id_photo_filename' => $idFilename
             ]);
         }

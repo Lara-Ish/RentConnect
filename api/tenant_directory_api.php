@@ -12,6 +12,7 @@ header('Content-Type: application/json; charset=UTF-8');
 
 require_once __DIR__ . '/../config/auth.php';
 require_once __DIR__ . '/../includes/notification_service.php';
+require_once __DIR__ . '/../includes/email_service.php';
 
 $requestMethod = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
@@ -111,7 +112,7 @@ try {
         $input = json_decode(file_get_contents('php://input'), true) ?? $_POST;
         $action = trim((string)($input['action'] ?? 'create'));
 
-        // DELETE ACTION (Tenant Moved Out)
+        // DELETE ACTION (Tenant Moved Out / Account Deletion)
         if ($action === 'delete') {
             $tenantId = (int)($input['tenant_id'] ?? 0);
 
@@ -121,25 +122,78 @@ try {
                 exit;
             }
 
-            // Verify target user is a tenant (never delete admin)
-            $check = $pdo->prepare("SELECT id, name, role, unit_id FROM users WHERE id = :id LIMIT 1");
-            $check->execute([':id' => $tenantId]);
-            $target = $check->fetch();
-
-            if (!$target || $target['role'] !== 'tenant') {
-                http_response_code(400);
-                echo json_encode(['status' => 'error', 'message' => 'Target user is not a removable tenant.']);
+            // Security: Prevent accidental deletion of currently logged-in Owner/Admin account
+            $currentUserId = (int)(Auth::user()['id'] ?? 0);
+            if ($tenantId === $currentUserId) {
+                http_response_code(403);
+                echo json_encode(['status' => 'error', 'message' => 'Cannot delete the logged-in administrator account.']);
                 exit;
             }
 
-            // Delete tenant account
-            $delStmt = $pdo->prepare("DELETE FROM users WHERE id = :id AND role = 'tenant'");
-            $delStmt->execute([':id' => $tenantId]);
+            $pdo->beginTransaction();
+
+            // Verify target user is an existing active tenant
+            $check = $pdo->prepare("SELECT id, name, role, unit_id, is_active FROM users WHERE id = :id FOR UPDATE");
+            $check->execute([':id' => $tenantId]);
+            $target = $check->fetch();
+
+            if (!$target || $target['role'] !== 'tenant' || (int)$target['is_active'] !== 1) {
+                $pdo->rollBack();
+                http_response_code(404);
+                echo json_encode(['status' => 'error', 'message' => 'Tenant account not found or has already been deleted.']);
+                exit;
+            }
+
+            $unitId = (int)($target['unit_id'] ?? 0);
+
+            // 1. Clean up transient user records
+            $pdo->prepare("DELETE FROM password_resets WHERE user_id = :id")->execute([':id' => $tenantId]);
+            $pdo->prepare("DELETE FROM notifications WHERE user_id = :id")->execute([':id' => $tenantId]);
+            $pdo->prepare("DELETE FROM announcement_recipients WHERE tenant_id = :id")->execute([':id' => $tenantId]);
+            $pdo->prepare("UPDATE apartment_settings SET active_tenant_id = NULL WHERE active_tenant_id = :id")->execute([':id' => $tenantId]);
+
+            // 2. Remove unconfigured placeholder payments (rent records created upon tenant registration that were never configured)
+            $pdo->prepare("DELETE FROM payments WHERE tenant_id = :id AND status = 'pending_setup'")->execute([':id' => $tenantId]);
+
+            // 3. Inspect audit trail: check for historical payments or maintenance tickets that must remain available for administrative audit
+            $auditStmt = $pdo->prepare("
+                SELECT 
+                    (SELECT COUNT(*) FROM payments WHERE tenant_id = :id) AS pay_count,
+                    (SELECT COUNT(*) FROM maintenance_tickets WHERE tenant_id = :id2) AS ticket_count
+            ");
+            $auditStmt->execute([':id' => $tenantId, ':id2' => $tenantId]);
+            $auditCounts = $auditStmt->fetch();
+            $hasAuditRecords = ((int)$auditCounts['pay_count'] > 0 || (int)$auditCounts['ticket_count'] > 0);
+
+            if ($hasAuditRecords) {
+                // Soft-delete / deactivate tenant account:
+                // Scrambles credentials, frees unit, retains ledger records for landlord audit
+                $upd = $pdo->prepare("
+                    UPDATE users 
+                    SET is_active = 0,
+                        unit_id = NULL,
+                        email = CONCAT(email, '.deleted.', UNIX_TIMESTAMP()),
+                        password_hash = 'DEACTIVATED_ACCOUNT',
+                        verification_status = 'unverified',
+                        id_photo_filename = NULL,
+                        live_photo_filename = NULL,
+                        updated_at = NOW()
+                    WHERE id = :id
+                ");
+                $upd->execute([':id' => $tenantId]);
+            } else {
+                // Safe to physically delete if no financial or maintenance audit records exist
+                $del = $pdo->prepare("DELETE FROM users WHERE id = :id");
+                $del->execute([':id' => $tenantId]);
+            }
+
+            $pdo->commit();
 
             echo json_encode([
                 'status' => 'success',
-                'unit_id' => (int)($target['unit_id'] ?? 0),
-                'message' => "Tenant account for '{$target['name']}' has been removed successfully (Move-out processed)."
+                'unit_id' => $unitId,
+                'tenant_id' => $tenantId,
+                'message' => "Tenant account for '{$target['name']}' has been deleted successfully."
             ]);
             exit;
         }
@@ -269,8 +323,97 @@ try {
             }
         }
 
+        // EDIT / UPDATE TENANT PERSONAL DETAILS
+        if ($action === 'update' || $action === 'edit_tenant') {
+            $tenantId = (int)($input['tenant_id'] ?? 0);
+            if ($tenantId <= 0) {
+                http_response_code(422);
+                echo json_encode(['status' => 'error', 'message' => 'Tenant ID is required.']);
+                exit;
+            }
+            $tName = trim((string)($input['name'] ?? ''));
+            $tEmail = trim((string)($input['email'] ?? ''));
+            $tPhone = trim((string)($input['phone'] ?? ''));
+            $tBirthday = trim((string)($input['birthday'] ?? ''));
+            $tMoveIn = trim((string)($input['move_in_date'] ?? ''));
+            $tEmergencyName = trim((string)($input['emergency_contact_name'] ?? ''));
+            $tEmergencyRel = trim((string)($input['emergency_contact_relationship'] ?? ''));
+            $tEmergencyPhone = trim((string)($input['emergency_contact_phone'] ?? ''));
+            $tAdults = (int)($input['adults_count'] ?? 1);
+            $tKids = (int)($input['kids_count'] ?? 0);
+            if ($tAdults < 1) $tAdults = 1;
+            if ($tKids < 0) $tKids = 0;
+            $tTotal = $tAdults + $tKids;
+
+            // Validate moving-in date if updated
+            if (!empty($tMoveIn)) {
+                date_default_timezone_set('Asia/Manila');
+                $manilaTodayStr = (new DateTime('today', new DateTimeZone('Asia/Manila')))->format('Y-m-d');
+                $moveInObj = DateTime::createFromFormat('Y-m-d', $tMoveIn, new DateTimeZone('Asia/Manila'));
+                if (!$moveInObj || $moveInObj->format('Y-m-d') !== $tMoveIn || $tMoveIn < $manilaTodayStr) {
+                    http_response_code(422);
+                    echo json_encode([
+                        'status' => 'error',
+                        'message' => 'Invalid moving-in date. Please select today or a future date.'
+                    ]);
+                    exit;
+                }
+            }
+
+            $upd = $pdo->prepare("
+                UPDATE users 
+                SET name = COALESCE(NULLIF(:name, ''), name),
+                    email = COALESCE(NULLIF(:email, ''), email),
+                    phone = COALESCE(NULLIF(:phone, ''), phone),
+                    birthday = NULLIF(:birthday, ''),
+                    move_in_date = COALESCE(NULLIF(:move_in, ''), move_in_date),
+                    emergency_contact_name = NULLIF(:em_name, ''),
+                    emergency_contact_relationship = NULLIF(:em_rel, ''),
+                    emergency_contact_phone = NULLIF(:em_phone, ''),
+                    adults_count = :adults,
+                    kids_count = :kids,
+                    total_occupants = :total
+                WHERE id = :id AND role = 'tenant'
+            ");
+            $upd->execute([
+                ':name' => $tName,
+                ':email' => $tEmail,
+                ':phone' => $tPhone,
+                ':birthday' => $tBirthday,
+                ':move_in' => $tMoveIn,
+                ':em_name' => $tEmergencyName,
+                ':em_rel' => $tEmergencyRel,
+                ':em_phone' => $tEmergencyPhone,
+                ':adults' => $tAdults,
+                ':kids' => $tKids,
+                ':total' => $tTotal,
+                ':id' => $tenantId
+            ]);
+
+            echo json_encode([
+                'status' => 'success',
+                'message' => 'Tenant details updated successfully.'
+            ]);
+            exit;
+        }
+
         // CREATE ACTION (Provision New Tenant with Auto-Generated Credentials)
         if ($action === 'create') {
+            // Anti-duplicate protection: prevent repeated rapid submissions within 2 seconds
+            if (session_status() === PHP_SESSION_ACTIVE) {
+                $now = microtime(true);
+                $lastCreateTime = (float)($_SESSION['last_tenant_create_time'] ?? 0);
+                if (($now - $lastCreateTime) < 2.0) {
+                    http_response_code(429);
+                    echo json_encode([
+                        'status' => 'error',
+                        'message' => 'Tenant creation is already in progress. Please wait a moment.'
+                    ]);
+                    exit;
+                }
+                $_SESSION['last_tenant_create_time'] = $now;
+            }
+
             $name = trim((string)($input['name'] ?? ''));
             $birthday = trim((string)($input['birthday'] ?? ''));
             $email = trim((string)($input['email'] ?? ''));
@@ -279,18 +422,31 @@ try {
             $emergencyName = trim((string)($input['emergency_contact_name'] ?? ''));
             $emergencyRel = trim((string)($input['emergency_contact_relationship'] ?? ''));
             $emergencyPhone = trim((string)($input['emergency_contact_phone'] ?? ''));
-            $moveInDate = trim((string)($input['move_in_date'] ?? date('Y-m-d')));
+            $moveInDate = trim((string)($input['move_in_date'] ?? ''));
             $adultsCount = (int)($input['adults_count'] ?? 1);
             $kidsCount = (int)($input['kids_count'] ?? 0);
             if ($adultsCount < 1) $adultsCount = 1;
             if ($kidsCount < 0) $kidsCount = 0;
             $totalOccupants = $adultsCount + $kidsCount;
 
-            if (empty($name) || empty($email)) {
+            if (empty($name) || empty($email) || empty($moveInDate)) {
                 http_response_code(422);
                 echo json_encode([
                     'status' => 'error',
-                    'message' => 'Full Name and Email Address are required fields.'
+                    'message' => 'Full Name, Email Address, and Date of Moving In are required fields.'
+                ]);
+                exit;
+            }
+
+            // Server-Side Validation: Date of Moving In must be today or a future date in Asia/Manila timezone
+            date_default_timezone_set('Asia/Manila');
+            $manilaTodayStr = (new DateTime('today', new DateTimeZone('Asia/Manila')))->format('Y-m-d');
+            $moveInObj = DateTime::createFromFormat('Y-m-d', $moveInDate, new DateTimeZone('Asia/Manila'));
+            if (!$moveInObj || $moveInObj->format('Y-m-d') !== $moveInDate || $moveInDate < $manilaTodayStr) {
+                http_response_code(422);
+                echo json_encode([
+                    'status' => 'error',
+                    'message' => 'Invalid moving-in date. Please select today or a future date.'
                 ]);
                 exit;
             }
@@ -416,7 +572,7 @@ try {
 
             $newId = (int)$pdo->lastInsertId();
 
-            // Auto-generate notifications for Landlord and new Tenant
+            // Auto-generate notifications for Landlord and new Tenant (in-app only, NO secondary emails)
             NotificationService::notifyLandlords(
                 $pdo,
                 'account',
@@ -424,7 +580,8 @@ try {
                 "A new tenant ({$name}) has been assigned to {$unit['unit_number']}.",
                 'sectionDirectory',
                 $newId,
-                'tenant_registered'
+                'tenant_registered',
+                false
             );
             NotificationService::notifyTenant(
                 $pdo,
@@ -434,55 +591,150 @@ try {
                 "Welcome to RentConnect! You have been assigned to {$unit['unit_number']}.",
                 'tenantProfile',
                 $newId,
-                'tenant_welcome'
+                'tenant_welcome',
+                false
             );
 
-            // Auto-Generate Placeholder Payment with Hardcoded Unit Pricing:
-            // Unit 1: 1 Bedroom, ₱6,000 | Unit 2: 2 Bedrooms, ₱8,000 | Unit 3: 3 Bedrooms, ₱8,000
-            $HARDCODED_UNITS = [
-                1 => ['unit_number' => 'Unit 1', 'bedrooms' => 1, 'monthly_rent' => 6000.00],
-                2 => ['unit_number' => 'Unit 2', 'bedrooms' => 2, 'monthly_rent' => 8000.00],
-                3 => ['unit_number' => 'Unit 3', 'bedrooms' => 3, 'monthly_rent' => 8000.00],
-            ];
+            // -----------------------------------------------------------------
+            // AUTOMATIC BILL GENERATION UPON TENANT ACCOUNT CREATION
+            // Generate two separate payment obligations:
+            // 1. Advance Deposit: ₱3,000.00 (One-Time, Unpaid)
+            // 2. Monthly Rent:    ₱3,000.00 (Recurring, Unpaid)
+            // Total Initial Due:  ₱6,000.00
+            // -----------------------------------------------------------------
+            $moveInCycle = date('Y-m-01', strtotime($moveInDate));
+            $rentDueDate = date('Y-m-05', strtotime($moveInCycle));
+            $standardRentAmount = !empty($unit['monthly_rent']) ? (float)$unit['monthly_rent'] : 3000.00;
+            if ($standardRentAmount <= 0) {
+                $standardRentAmount = 3000.00;
+            }
 
-            $unitIdInt = (int)$unitId;
-            $rentAmount = isset($HARDCODED_UNITS[$unitIdInt])
-                ? (float)$HARDCODED_UNITS[$unitIdInt]['monthly_rent']
-                : (!empty($unit['monthly_rent']) ? (float)$unit['monthly_rent'] : 8000.00);
+            // 1. Advance Deposit Bill (₱3,000.00, Unpaid, Non-recurring)
+            $dupDepositStmt = $pdo->prepare("SELECT id FROM payments WHERE tenant_id = :tid AND payment_type = 'Advance Deposit' LIMIT 1");
+            $dupDepositStmt->execute([':tid' => $newId]);
+            $existingDeposit = $dupDepositStmt->fetch();
 
-            $billingCycle = date('Y-m-01', strtotime($moveInDate ?: date('Y-m-d')));
-            $dueDate = date('Y-m-05', strtotime($moveInDate ?: date('Y-m-d')));
+            if (!$existingDeposit) {
+                $depositStmt = $pdo->prepare("
+                    INSERT INTO payments (
+                        tenant_id, unit_id, payment_type, billing_cycle, due_date, amount_due, amount_paid, 
+                        payment_date, status, payment_method, receipt_filename, verified_by_landlord, 
+                        verification_notes, created_at
+                    ) VALUES (
+                        :tenant_id, :unit_id, 'Advance Deposit', :cycle, :due_date, 3000.00, 0.00,
+                        NULL, 'unpaid', 'GCash / Bank Transfer', NULL, 0,
+                        'Advance deposit required upon account creation', NOW()
+                    )
+                ");
+                $depositStmt->execute([
+                    ':tenant_id' => $newId,
+                    ':unit_id' => $unitId,
+                    ':cycle' => $moveInCycle,
+                    ':due_date' => $moveInDate
+                ]);
+                $advanceDepositId = (int)$pdo->lastInsertId();
+            } else {
+                $advanceDepositId = (int)$existingDeposit['id'];
+            }
 
-            $placeholderPaymentStmt = $pdo->prepare("
-                INSERT INTO payments (
-                    tenant_id, unit_id, billing_cycle, due_date, amount_due, amount_paid, 
-                    status, payment_method, verified_by_landlord, verification_notes, created_at
-                ) VALUES (
-                    :tenant_id, :unit_id, :billing_cycle, :due_date, :amount_due, 0.00,
-                    'pending', 'GCash / Bank Transfer', 0, 'Placeholder initial rent payment generated upon tenant registration.', NOW()
-                )
-            ");
-            $placeholderPaymentStmt->execute([
-                ':tenant_id' => $newId,
-                ':unit_id' => $unitId,
-                ':billing_cycle' => $billingCycle,
-                ':due_date' => $dueDate,
-                ':amount_due' => $rentAmount
-            ]);
-            $placeholderPaymentId = (int)$pdo->lastInsertId();
+            // 2. Monthly Rent Bill (₱3,000.00, Unpaid, Recurring)
+            $dupRentStmt = $pdo->prepare("SELECT id FROM payments WHERE tenant_id = :tid AND payment_type = 'Rent' AND (billing_cycle = :cycle OR status IN ('unpaid', 'pending_setup')) LIMIT 1");
+            $dupRentStmt->execute([':tid' => $newId, ':cycle' => $moveInCycle]);
+            $existingRent = $dupRentStmt->fetch();
 
-            // Update apartment settings monthly rent if this is unit 1 or active tenant
-            $pdo->prepare("UPDATE apartment_settings SET active_tenant_id = :tid, monthly_rent = :rent, updated_at = NOW() WHERE id = 1")
-                ->execute([':tid' => $newId, ':rent' => $rentAmount]);
+            if (!$existingRent) {
+                $rentStmt = $pdo->prepare("
+                    INSERT INTO payments (
+                        tenant_id, unit_id, payment_type, billing_cycle, due_date, amount_due, amount_paid, 
+                        payment_date, status, payment_method, receipt_filename, verified_by_landlord, 
+                        verification_notes, created_at
+                    ) VALUES (
+                        :tenant_id, :unit_id, 'Rent', :cycle, :due_date, :amount_due, 0.00,
+                        NULL, 'unpaid', 'GCash / Bank Transfer', NULL, 0,
+                        :vnotes, NOW()
+                    )
+                ");
+                $rentStmt->execute([
+                    ':tenant_id' => $newId,
+                    ':unit_id' => $unitId,
+                    ':cycle' => $moveInCycle,
+                    ':due_date' => $rentDueDate,
+                    ':amount_due' => $standardRentAmount,
+                    ':vnotes' => "Monthly rent for " . date('F Y', strtotime($moveInCycle)) . " - Due upon occupancy."
+                ]);
+                $monthlyRentId = (int)$pdo->lastInsertId();
+            } else {
+                $monthlyRentId = (int)$existingRent['id'];
+            }
+
+            // Update apartment settings active tenant tracking
+            $pdo->prepare("UPDATE apartment_settings SET active_tenant_id = :tid, updated_at = NOW() WHERE id = 1")
+                ->execute([':tid' => $newId]);
 
             // Commit transaction
             $pdo->commit();
 
+            // Automatically send exactly ONE email to the Tenant with account details (username & temporary password)
+            // CRITICAL: Dynamically query the registered email address directly from the MySQL database record
+            // Do not send this email to the Owner/Admin or any other tenant.
+            $emailSent = false;
+            try {
+                $dbTenantStmt = $pdo->prepare("
+                    SELECT u.id, u.username, u.name, u.email, un.unit_number 
+                    FROM users u 
+                    LEFT JOIN units un ON u.unit_id = un.id 
+                    WHERE u.id = :id AND u.role = 'tenant' 
+                    LIMIT 1
+                ");
+                $dbTenantStmt->execute([':id' => $newId]);
+                $dbTenant = $dbTenantStmt->fetch(PDO::FETCH_ASSOC);
+
+                if ($dbTenant && !empty($dbTenant['email']) && filter_var($dbTenant['email'], FILTER_VALIDATE_EMAIL)) {
+                    $retrievedEmail    = (string)$dbTenant['email'];
+                    $retrievedName     = (string)$dbTenant['name'];
+                    $retrievedUsername = (string)($dbTenant['username'] ?: $generatedUsername);
+                    $retrievedUnit     = (string)($dbTenant['unit_number'] ?: $unit['unit_number']);
+
+                    $emailSent = EmailService::sendTenantAccountCreated(
+                        $pdo,
+                        $retrievedEmail,
+                        $retrievedName,
+                        $retrievedUsername,
+                        $generatedPassword,
+                        $retrievedUnit,
+                        $newId,
+                        $newId
+                    );
+                } else {
+                    EmailService::logEmail(
+                        $pdo,
+                        (string)($dbTenant['email'] ?? $email),
+                        (string)($dbTenant['name'] ?? $name),
+                        'Your Apartment Management System Account Has Been Created',
+                        'tenant_account_created',
+                        $newId,
+                        'tenant',
+                        'failed',
+                        'Invalid or missing tenant email retrieved from database.',
+                        $newId
+                    );
+                }
+            } catch (Throwable $mailEx) {
+                error_log('[Tenant Directory] Failed to dispatch account creation email: ' . $mailEx->getMessage());
+            }
+
+            $successMessage = $emailSent
+                ? "Tenant account created successfully! Account details have been sent to the tenant's email address."
+                : "Tenant account created, but account details email could not be sent. Please check email logs or SMTP settings.";
+
             echo json_encode([
                 'status' => 'success',
-                'message' => "Tenant '{$name}' created and assigned to {$unit['unit_number']} successfully!",
+                'message' => $successMessage,
                 'tenant_id' => $newId,
-                'placeholder_payment_id' => $placeholderPaymentId,
+                'advance_deposit_id' => $advanceDepositId,
+                'rent_payment_id' => $monthlyRentId,
+                'placeholder_payment_id' => $monthlyRentId,
+                'email_sent' => $emailSent,
                 'credentials' => [
                     'username' => $generatedUsername,
                     'password' => $generatedPassword,

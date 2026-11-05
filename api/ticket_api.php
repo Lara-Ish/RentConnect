@@ -10,6 +10,7 @@ header('Content-Type: application/json; charset=UTF-8');
 
 require_once __DIR__ . '/../config/auth.php';
 require_once __DIR__ . '/../includes/notification_service.php';
+require_once __DIR__ . '/../includes/email_service.php';
 
 $requestMethod = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
@@ -26,8 +27,8 @@ try {
         $input = is_array($rawInput) ? $rawInput : $_POST;
         $action = trim((string)($input['action'] ?? 'create'));
 
-        // Action 1: Landlord Updates Ticket Status / Cost
-        if ($action === 'update_ticket') {
+        // Action 1: Landlord Updates Ticket Status / Cost / Reply
+        if ($action === 'update_ticket' || $action === 'reply_ticket') {
             if (!Auth::isLandlord()) {
                 http_response_code(403);
                 echo json_encode(['status' => 'error', 'message' => 'Unauthorized action.']);
@@ -35,50 +36,114 @@ try {
             }
 
             $ticketId = (int)($input['ticket_id'] ?? 0);
-            $newStatus = trim((string)($input['status'] ?? 'open'));
-            $actualCost = (float)($input['actual_cost'] ?? 0.00);
+            $newStatus = trim((string)($input['status'] ?? ''));
+            $actualCost = isset($input['actual_cost']) ? (float)$input['actual_cost'] : null;
+            $reply = trim((string)($input['reply'] ?? ($input['resolution_notes'] ?? '')));
+
+            // Fetch existing ticket details and tenant info
+            $ticketStmt = $pdo->prepare("
+                SELECT mt.*, u.name AS tenant_name, u.email AS tenant_email, un.unit_number
+                FROM maintenance_tickets mt
+                JOIN users u ON mt.tenant_id = u.id
+                LEFT JOIN units un ON mt.unit_id = un.id
+                WHERE mt.id = :id
+                LIMIT 1
+            ");
+            $ticketStmt->execute([':id' => $ticketId]);
+            $ticketRow = $ticketStmt->fetch();
+
+            if (!$ticketRow) {
+                http_response_code(404);
+                echo json_encode(['status' => 'error', 'message' => 'Maintenance ticket not found.']);
+                exit;
+            }
+
+            $statusToSave = !empty($newStatus) ? $newStatus : $ticketRow['status'];
+            $costToSave = $actualCost !== null ? $actualCost : (float)$ticketRow['actual_cost'];
+            $replyToSave = !empty($reply) ? $reply : ($ticketRow['resolution_notes'] ?? '');
 
             $stmt = $pdo->prepare("
                 UPDATE maintenance_tickets 
                 SET status = :s,
                     actual_cost = :c,
+                    resolution_notes = :r,
                     resolved_at = CASE WHEN :s IN ('resolved', 'closed') THEN NOW() ELSE NULL END
                 WHERE id = :id
             ");
             $stmt->execute([
-                ':s' => $newStatus,
-                ':c' => $actualCost,
+                ':s' => $statusToSave,
+                ':c' => $costToSave,
+                ':r' => $replyToSave,
                 ':id' => $ticketId
             ]);
 
-            // Notify Tenant about ticket status update
-            $ticketStmt = $pdo->prepare("SELECT tenant_id, title FROM maintenance_tickets WHERE id = :id LIMIT 1");
-            $ticketStmt->execute([':id' => $ticketId]);
-            $ticketRow = $ticketStmt->fetch();
+            // Automatically send email to Tenant regarding Owner reply and status update
+            // CRITICAL: Tenant email is dynamically retrieved from database via JOIN users u ON mt.tenant_id = u.id
+            $ownerMessage = !empty($reply) ? $reply : "Your ticket status has been updated to " . ucfirst($statusToSave) . ".";
+            $emailSent = false;
+            $tenantId = (int)$ticketRow['tenant_id'];
+            $tenantEmail = trim((string)($ticketRow['tenant_email'] ?? ''));
 
-            if ($ticketRow && !empty($ticketRow['tenant_id'])) {
-                $statusLabel = ucfirst($newStatus);
-                $titleText = ($newStatus === 'resolved' || $newStatus === 'closed') 
-                    ? 'Maintenance Request Resolved' 
-                    : 'Maintenance Ticket Updated';
-                $msgText = ($newStatus === 'resolved')
-                    ? "Your maintenance request #{$ticketId} ('{$ticketRow['title']}') is now marked as Resolved."
-                    : "The owner updated maintenance ticket #{$ticketId} ('{$ticketRow['title']}') to status: {$statusLabel}.";
-                NotificationService::notifyTenant(
-                    $pdo,
-                    (int)$ticketRow['tenant_id'],
-                    'maintenance',
-                    $titleText,
-                    $msgText,
-                    'tenantProfile',
-                    $ticketId,
-                    'ticket_status_' . $newStatus
-                );
+            try {
+                if (!empty($tenantEmail) && filter_var($tenantEmail, FILTER_VALIDATE_EMAIL)) {
+                    $emailSent = EmailService::notifyTenantTicketReply(
+                        $pdo,
+                        $tenantEmail,
+                        (string)$ticketRow['tenant_name'],
+                        (string)$ticketRow['title'],
+                        $ownerMessage,
+                        $statusToSave,
+                        $ticketId,
+                        $tenantId
+                    );
+                } else {
+                    EmailService::logEmail(
+                        $pdo,
+                        $tenantEmail,
+                        (string)$ticketRow['tenant_name'],
+                        "Maintenance Request Update - {$ticketRow['title']}",
+                        'ticket_reply',
+                        $ticketId,
+                        'ticket',
+                        'failed',
+                        'Tenant record in database is missing a valid email address.',
+                        $tenantId
+                    );
+                }
+            } catch (Throwable $mailEx) {
+                error_log('[Ticket API] Failed to send email reply: ' . $mailEx->getMessage());
             }
+
+            // In-app notification directing to tenantMaintenance
+            $statusLabel = ucfirst($statusToSave);
+            $titleText = ($statusToSave === 'resolved' || $statusToSave === 'closed') 
+                ? 'Maintenance Request Resolved' 
+                : 'Maintenance Ticket Updated';
+            $msgText = !empty($reply)
+                ? "Owner replied to ticket #{$ticketId} ('{$ticketRow['title']}'): {$reply}"
+                : "The owner updated maintenance ticket #{$ticketId} ('{$ticketRow['title']}') to status: {$statusLabel}.";
+
+            NotificationService::notifyTenant(
+                $pdo,
+                (int)$ticketRow['tenant_id'],
+                'maintenance',
+                $titleText,
+                $msgText,
+                'tenantMaintenance',
+                $ticketId,
+                'ticket_status_' . $statusToSave
+            );
 
             echo json_encode([
                 'status' => 'success',
-                'message' => "Ticket #{$ticketId} updated to {$newStatus} (\${$actualCost})."
+                'message' => "Ticket #{$ticketId} updated successfully. Response and email dispatched to tenant.",
+                'email_sent' => $emailSent,
+                'ticket' => [
+                    'id' => $ticketId,
+                    'status' => $statusToSave,
+                    'actual_cost' => $costToSave,
+                    'resolution_notes' => $replyToSave
+                ]
             ]);
             exit;
         }
@@ -224,12 +289,59 @@ try {
     }
 
     if ($requestMethod === 'GET') {
-        $stmt = $pdo->query("
-            SELECT mt.*, u.name AS tenant_name
+        $currentUser = Auth::user();
+        $ticketId = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+
+        if ($ticketId > 0) {
+            $query = "
+                SELECT mt.*, u.name AS tenant_name, u.email AS tenant_email, u.phone AS tenant_phone, un.unit_number
+                FROM maintenance_tickets mt
+                JOIN users u ON mt.tenant_id = u.id
+                LEFT JOIN units un ON mt.unit_id = un.id
+                WHERE mt.id = :id
+            ";
+            $params = [':id' => $ticketId];
+
+            if (Auth::isTenant() && $currentUser) {
+                $query .= " AND mt.tenant_id = :tid";
+                $params[':tid'] = (int)$currentUser['id'];
+            }
+
+            $stmt = $pdo->prepare($query);
+            $stmt->execute($params);
+            $ticket = $stmt->fetch();
+
+            if (!$ticket) {
+                http_response_code(404);
+                echo json_encode(['status' => 'error', 'message' => 'Maintenance ticket not found or access restricted.']);
+                exit;
+            }
+
+            echo json_encode([
+                'status' => 'success',
+                'ticket' => $ticket
+            ]);
+            exit;
+        }
+
+        // List maintenance requests with strict tenant filtering
+        $query = "
+            SELECT mt.*, u.name AS tenant_name, u.email AS tenant_email, u.phone AS tenant_phone, un.unit_number
             FROM maintenance_tickets mt
             JOIN users u ON mt.tenant_id = u.id
-            ORDER BY mt.created_at DESC
-        ");
+            LEFT JOIN units un ON mt.unit_id = un.id
+        ";
+        $params = [];
+
+        if (Auth::isTenant() && $currentUser) {
+            $query .= " WHERE mt.tenant_id = :tid";
+            $params[':tid'] = (int)$currentUser['id'];
+        }
+
+        $query .= " ORDER BY mt.created_at DESC";
+
+        $stmt = $pdo->prepare($query);
+        $stmt->execute($params);
         $tickets = $stmt->fetchAll();
 
         echo json_encode([
