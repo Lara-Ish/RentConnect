@@ -333,7 +333,7 @@ try {
 }
 
 if ($isCli) {
-    echo "=== RENTCONNECT SCHEDULED REMINDERS SUMMARY ===\n";
+    echo "=== TARARENT SCHEDULED REMINDERS SUMMARY ===\n";
     echo "Upcoming (3 Days):     {$summary['upcoming_3days_sent']}\n";
     echo "Upcoming (1 Day):      {$summary['upcoming_1day_sent']}\n";
     echo "Due Today Sent:        {$summary['due_today_sent']}\n";

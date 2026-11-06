@@ -77,7 +77,7 @@ class MailConfig
             $fromEmail = 'notifications@rentconnect.ph';
         }
 
-        $fromName   = getenv('SMTP_FROM_NAME') ?: ($_ENV['SMTP_FROM_NAME'] ?? ($_SERVER['SMTP_FROM_NAME'] ?? 'Apartment Management System'));
+        $fromName   = getenv('SMTP_FROM_NAME') ?: ($_ENV['SMTP_FROM_NAME'] ?? ($_SERVER['SMTP_FROM_NAME'] ?? 'TaraRent'));
         
         // Resolve APP_URL dynamically if not set in environment
         $appUrl = getenv('APP_URL') ?: ($_ENV['APP_URL'] ?? ($_SERVER['APP_URL'] ?? ''));

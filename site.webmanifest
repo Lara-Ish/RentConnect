@@ -1,0 +1,19 @@
+{
+  "name": "TaraRent – Apartment Management System",
+  "short_name": "TaraRent",
+  "icons": [
+    {
+      "src": "assets/images/favicon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "assets/images/favicon.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ],
+  "theme_color": "#7c3aed",
+  "background_color": "#f8fafc",
+  "display": "standalone"
+}

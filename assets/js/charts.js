@@ -324,3 +324,6 @@ const RentConnectCharts = (() => {
     }
   };
 })();
+
+// TaraRent Charts Global Alias
+window.TaraRentCharts = RentConnectCharts;

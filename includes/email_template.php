@@ -103,7 +103,7 @@ class EmailTemplate
                                 {$safeHeading}
                             </h1>
                             <p style="color: rgba(255, 255, 255, 0.85); font-size: 12.5px; margin: 6px 0 0 0; font-weight: 500;">
-                                RentConnect Apartment Management System
+                                TaraRent Apartment Management System
                             </p>
                         </td>
                     </tr>
@@ -130,7 +130,7 @@ class EmailTemplate
                     <tr>
                         <td style="background-color: #f8fafc; padding: 24px 36px; text-align: center; border-top: 1px solid #e2e8f0;">
                             <div style="display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 8px;">
-                                <span style="font-size: 13px; font-weight: 800; color: #4f46e5;">RentConnect</span>
+                                <span style="font-size: 13px; font-weight: 800; color: #4f46e5;">TaraRent</span>
                                 <span style="font-size: 12px; color: #94a3b8;">• Apartment Community</span>
                             </div>
                             <p style="font-size: 11.5px; color: #94a3b8; margin: 0 0 6px 0; line-height: 1.5;">
@@ -138,7 +138,7 @@ class EmailTemplate
                                 Please do not reply directly to this email.
                             </p>
                             <p style="font-size: 11px; color: #cbd5e1; margin: 0;">
-                                &copy; 2026 RentConnect. All rights reserved.
+                                &copy; 2026 TaraRent. All rights reserved.
                             </p>
                         </td>
                     </tr>

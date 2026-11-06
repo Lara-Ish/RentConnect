@@ -542,13 +542,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Forgot Password - RentConnect</title>
+  <title>TaraRent – Apartment Management System</title>
 
   <!-- Global Favicon -->
+  <link rel="icon" type="image/png" sizes="16x16" href="assets/images/favicon-16.png">
   <link rel="icon" type="image/png" sizes="32x32" href="assets/images/favicon-32.png">
   <link rel="icon" type="image/png" sizes="64x64" href="assets/images/favicon-64.png">
   <link rel="apple-touch-icon" sizes="192x192" href="assets/images/favicon-192.png">
   <link rel="shortcut icon" href="favicon.ico">
+  <link rel="manifest" href="site.webmanifest">
 
   <!-- Typography: Plus Jakarta Sans -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -632,8 +634,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <!-- Brand Pill -->
     <div class="text-center mb-6">
       <div class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-indigo-50/90 border border-indigo-100 shadow-inner text-xs font-bold text-indigo-700">
-        <img src="assets/images/favicon-32.png" alt="Logo" class="w-4 h-4 object-contain">
-        <span>RentConnect</span>
+        <img src="assets/images/tararent-logo.png" alt="TaraRent Logo" class="w-4 h-4 object-contain" style="width: 18px; height: 18px; object-fit: contain;">
+        <span>TaraRent</span>
       </div>
     </div>
 

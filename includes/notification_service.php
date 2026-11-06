@@ -82,7 +82,7 @@ class NotificationService
                     $referenceType
                 );
             } catch (Throwable $e) {
-                error_log("[RentConnect Notification] Email dispatch failed: " . $e->getMessage());
+                error_log("[TaraRent Notification] Email dispatch failed: " . $e->getMessage());
             }
         }
 

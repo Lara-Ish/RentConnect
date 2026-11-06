@@ -97,14 +97,14 @@ if (!function_exists('sendEmail')) {
             if ($pdo !== null) {
                 EmailService::logEmail($pdo, $recipientEmail, '', $subject, 'general', null, null, 'failed', $err, $recipientUserId);
             }
-            error_log("[RentConnect Mail] Failed to send email to {$recipientEmail}: {$err}");
+            error_log("[TaraRent Mail] Failed to send email to {$recipientEmail}: {$err}");
             throw new Exception($err, (int)$e->getCode(), $e);
         } catch (Throwable $e) {
             $err = "System Error: " . $e->getMessage();
             if ($pdo !== null) {
                 EmailService::logEmail($pdo, $recipientEmail, '', $subject, 'general', null, null, 'failed', $err, $recipientUserId);
             }
-            error_log("[RentConnect Mail] Exception sending email to {$recipientEmail}: {$err}");
+            error_log("[TaraRent Mail] Exception sending email to {$recipientEmail}: {$err}");
             throw new Exception($err, (int)$e->getCode(), $e);
         }
     }
@@ -245,12 +245,12 @@ class EmailService
         } catch (PHPMailerException $e) {
             $errorMsg = "PHPMailer Error: " . $mail->ErrorInfo;
             self::logEmail($pdo, $toEmail, $toName, $subject, $templateType, $referenceId, $referenceType, 'failed', $errorMsg, $recipientUserId);
-            error_log("[RentConnect Mail] Failed to send email to {$toEmail}: {$errorMsg}");
+            error_log("[TaraRent Mail] Failed to send email to {$toEmail}: {$errorMsg}");
             return false;
         } catch (Throwable $e) {
             $errorMsg = "System Error: " . $e->getMessage();
             self::logEmail($pdo, $toEmail, $toName, $subject, $templateType, $referenceId, $referenceType, 'failed', $errorMsg, $recipientUserId);
-            error_log("[RentConnect Mail] Exception sending email to {$toEmail}: {$errorMsg}");
+            error_log("[TaraRent Mail] Exception sending email to {$toEmail}: {$errorMsg}");
             return false;
         }
     }
@@ -489,8 +489,8 @@ class EmailService
         int $expireMinutes = 60,
         ?int $recipientUserId = null
     ): bool {
-        $subject = 'RentConnect - Password Reset Request';
-        $intro = "We received a request to reset the password for your RentConnect account. Click the button below to choose a new password. This link is valid for the next <strong>{$expireMinutes} minutes</strong>.";
+        $subject = 'TaraRent - Password Reset Request';
+        $intro = "We received a request to reset the password for your TaraRent account. Click the button below to choose a new password. This link is valid for the next <strong>{$expireMinutes} minutes</strong>.";
 
         $details = [
             'Account Email' => $recipientEmail,
@@ -1199,7 +1199,7 @@ class EmailService
         ?int $recipientUserId = null
     ): bool {
         $recipientUserId = $recipientUserId ?: $tenantId;
-        $subject = "Welcome to RentConnect - {$unitNumber}";
+        $subject = "Welcome to TaraRent - {$unitNumber}";
 
         $intro = "Welcome to your new home! Your resident account for <strong>{$unitNumber}</strong> has been successfully configured.";
 
@@ -1214,7 +1214,7 @@ class EmailService
         $actionUrl = $config['app_url'] . '/tenant_portal.php';
 
         $html = EmailTemplate::render(
-            'Welcome to RentConnect',
+            'Welcome to TaraRent',
             'WELCOME ABOARD',
             $tenantName,
             $intro,
@@ -1236,9 +1236,9 @@ class EmailService
         string $recipientName,
         ?int $recipientUserId = null
     ): bool {
-        $subject = 'RentConnect - Password Changed Successfully';
+        $subject = 'TaraRent - Password Changed Successfully';
 
-        $intro = "The password for your RentConnect account (<strong>{$recipientEmail}</strong>) was changed successfully. If you initiated this change, no further action is required.";
+        $intro = "The password for your TaraRent account (<strong>{$recipientEmail}</strong>) was changed successfully. If you initiated this change, no further action is required.";
 
         $details = [
             'Account Email' => $recipientEmail,
@@ -1276,11 +1276,11 @@ class EmailService
         ?string $actionText = null,
         ?int $recipientUserId = null
     ): bool {
-        $subject = "RentConnect Notification: {$title}";
+        $subject = "TaraRent Notification: {$title}";
 
         $config = MailConfig::get();
         $url = $actionUrl ?: $config['app_url'];
-        $btnText = $actionText ?: 'Open RentConnect';
+        $btnText = $actionText ?: 'Open TaraRent';
 
         $details = [
             'Subject'   => $title,

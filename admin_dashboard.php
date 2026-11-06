@@ -125,13 +125,15 @@ $pendingReviewCount = count($pendingReviewPayments);
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Landlord Dashboard • RentConnect</title>
+  <title>TaraRent – Apartment Management System</title>
 
   <!-- Global Favicon -->
+  <link rel="icon" type="image/png" sizes="16x16" href="assets/images/favicon-16.png">
   <link rel="icon" type="image/png" sizes="32x32" href="assets/images/favicon-32.png">
   <link rel="icon" type="image/png" sizes="64x64" href="assets/images/favicon-64.png">
   <link rel="apple-touch-icon" sizes="192x192" href="assets/images/favicon-192.png">
   <link rel="shortcut icon" href="favicon.ico">
+  <link rel="manifest" href="site.webmanifest">
 
   <!-- Typography -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -314,10 +316,10 @@ $pendingReviewCount = count($pendingReviewPayments);
         <div class="sidebar-top-header">
           <div class="brand-wrapper" style="padding: 0; margin-bottom: 0;">
             <div class="brand-icon-clay" style="width: 42px; height: 42px; display: flex; align-items: center; justify-content: center; background: #ffffff;">
-              <img src="assets/images/favicon-64.png" alt="RentConnect Logo" style="width: 28px; height: 28px; object-fit: contain;">
+              <img src="assets/images/tararent-logo.png" alt="TaraRent Logo" style="width: 32px; height: 32px; object-fit: contain;">
             </div>
             <div class="hide-on-retract">
-              <div style="font-size: 18px; font-weight: 800; color: #0f172a; letter-spacing: -0.5px;">RentConnect</div>
+              <div style="font-size: 18px; font-weight: 800; color: #0f172a; letter-spacing: -0.5px;">TaraRent</div>
               <div style="font-size: 10.5px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Management Portal</div>
             </div>
           </div>
@@ -1172,7 +1174,7 @@ $pendingReviewCount = count($pendingReviewPayments);
                   </div>
                   <div class="detail-item">
                     <span class="detail-label">Email Address: </span>
-                    <span class="detail-value" style="font-size: 15px; font-weight: 700;"><?= htmlspecialchars($user['email'] ?? 'admin@rentconnect.ph') ?></span>
+                    <span class="detail-value" style="font-size: 15px; font-weight: 700;"><?= htmlspecialchars($user['email'] ?? 'admin@tararent.ph') ?></span>
                   </div>
                   <div class="detail-item">
                     <span class="detail-label">Administrative Role: </span>
@@ -2545,7 +2547,7 @@ $pendingReviewCount = count($pendingReviewPayments);
 
     function copyAllCredentials(btn) {
       if (!currentGeneratedCreds) return;
-      const text = `RentConnect Resident Account\nResident: ${currentGeneratedCreds.name}\nUnit: ${currentGeneratedCreds.unit_number}\nUsername: ${currentGeneratedCreds.username}\nPassword: ${currentGeneratedCreds.password}`;
+      const text = `TaraRent Resident Account\nResident: ${currentGeneratedCreds.name}\nUnit: ${currentGeneratedCreds.unit_number}\nUsername: ${currentGeneratedCreds.username}\nPassword: ${currentGeneratedCreds.password}`;
       navigator.clipboard.writeText(text).then(() => {
         const orig = btn.textContent;
         btn.textContent = '✓ All Copied!';

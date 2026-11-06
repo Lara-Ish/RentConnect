@@ -237,13 +237,15 @@ if (!$tokenMode && $_SERVER['REQUEST_METHOD'] === 'POST') {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Reset Password - RentConnect</title>
+  <title>TaraRent – Apartment Management System</title>
 
   <!-- Global Favicon -->
+  <link rel="icon" type="image/png" sizes="16x16" href="assets/images/favicon-16.png">
   <link rel="icon" type="image/png" sizes="32x32" href="assets/images/favicon-32.png">
   <link rel="icon" type="image/png" sizes="64x64" href="assets/images/favicon-64.png">
   <link rel="apple-touch-icon" sizes="192x192" href="assets/images/favicon-192.png">
   <link rel="shortcut icon" href="favicon.ico">
+  <link rel="manifest" href="site.webmanifest">
 
   <!-- Typography -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -308,8 +310,8 @@ if (!$tokenMode && $_SERVER['REQUEST_METHOD'] === 'POST') {
       <!-- Brand Pill -->
       <div style="text-align: center;">
         <div class="app-badge-pill">
-          <img src="assets/images/favicon-32.png" alt="Logo" style="width: 18px; height: 18px; object-fit: contain;">
-          <span>RentConnect</span>
+          <img src="assets/images/tararent-logo.png" alt="TaraRent Logo" style="width: 18px; height: 18px; object-fit: contain;">
+          <span>TaraRent</span>
         </div>
       </div>
 
