@@ -10,6 +10,7 @@ header('Content-Type: application/json; charset=UTF-8');
 
 require_once __DIR__ . '/../config/auth.php';
 require_once __DIR__ . '/../includes/notification_service.php';
+require_once __DIR__ . '/../includes/tenant_service.php';
 
 $requestMethod = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
@@ -135,11 +136,39 @@ try {
                 );
             }
 
+            // Automatic Archiving Check:
+            // When a tenant has officially moved out and paid all outstanding bills,
+            // automatically archive the tenant account and payment history.
+            $autoArchived = false;
+            $tenantId = (int)($payment['tenant_id'] ?? 0);
+            if ($isApproved && $tenantId > 0) {
+                $tStmt = $pdo->prepare("
+                    SELECT * FROM users 
+                    WHERE id = :id AND role = 'tenant' AND is_active = 1 AND (is_archived = 0 OR is_archived IS NULL)
+                    LIMIT 1
+                ");
+                $tStmt->execute([':id' => $tenantId]);
+                $tUser = $tStmt->fetch(PDO::FETCH_ASSOC);
+
+                if ($tUser && ($tUser['rental_status'] ?? 'active') === 'moved_out') {
+                    $settlement = TenantService::checkTenantSettlement($pdo, $tenantId);
+                    if ($settlement['is_settled']) {
+                        TenantService::archiveSettledTenant($pdo, $tenantId, $tUser);
+                        $autoArchived = true;
+                    }
+                }
+            }
+
+            $successMsg = $isApproved 
+                ? ($autoArchived 
+                    ? 'Payment receipt successfully verified and approved! The tenant has moved out and all bills are fully settled. Tenant account and payment history have been automatically transferred to Archived Tenants.' 
+                    : 'Payment receipt successfully verified and approved!')
+                : 'Payment receipt rejected. Feedback logged for tenant.';
+
             echo json_encode([
                 'status' => 'success',
-                'message' => $isApproved 
-                    ? 'Payment receipt successfully verified and approved!' 
-                    : 'Payment receipt rejected. Feedback logged for tenant.',
+                'message' => $successMsg,
+                'auto_archived' => $autoArchived,
                 'payment' => [
                     'id' => $paymentId,
                     'status' => $statusVal,
@@ -282,19 +311,38 @@ try {
                 $paymentId = (int)$pdo->lastInsertId();
             }
 
-            // Notify Landlords of submitted payment proof
-            $tenantName = $tenantUser['name'] ?? 'Tenant';
-            $cycleMonth = date('F Y', strtotime($billingCycle));
-            $notifObligation = ($paymentType === 'Advance Deposit') ? 'Advance Deposit' : "Rent ({$cycleMonth})";
+            // Retrieve fresh payment details for exact notification display
+            $pInfoStmt = $pdo->prepare("
+                SELECT p.id, p.amount_paid, p.payment_date, p.created_at, u.name as tenant_name, un.unit_number
+                FROM payments p
+                JOIN users u ON p.tenant_id = u.id
+                LEFT JOIN units un ON p.unit_id = un.id
+                WHERE p.id = :pid
+                LIMIT 1
+            ");
+            $pInfoStmt->execute([':pid' => $paymentId]);
+            $pInfo = $pInfoStmt->fetch(PDO::FETCH_ASSOC);
+
+            $pTenantName = $pInfo['tenant_name'] ?? ($tenantUser['name'] ?? 'Tenant');
+            $pUnitNum = $pInfo['unit_number'] ?: 'Unit';
+            $pAmountStr = '₱' . number_format((float)($pInfo['amount_paid'] ?? $amountPaid), 2);
+            $pSubDateRaw = !empty($pInfo['payment_date']) ? $pInfo['payment_date'] : (!empty($pInfo['created_at']) ? $pInfo['created_at'] : 'now');
+            $pSubDate = date('M j, Y', strtotime($pSubDateRaw));
+
+            // Notify Landlords of submitted payment proof (strictly Tenant Rent Payment Submission)
             NotificationService::notifyLandlords(
                 $pdo,
                 'payment',
-                'Payment Proof Submitted',
-                "{$tenantName} submitted payment proof for {$notifObligation}. Payment verification is required.",
+                'Tenant Rent Payment Submission',
+                "Tenant: {$pTenantName} • Unit: {$pUnitNum} • Amount Paid: {$pAmountStr} • Submitted: {$pSubDate}",
                 'sectionPayments',
                 $paymentId,
                 'payment_submitted'
             );
+
+            // Notify Tenant (preserved)
+            $cycleMonth = date('F Y', strtotime($billingCycle));
+            $notifObligation = ($paymentType === 'Advance Deposit') ? 'Advance Deposit' : "Rent ({$cycleMonth})";
             NotificationService::notifyTenant(
                 $pdo,
                 $tenantId,
@@ -426,20 +474,50 @@ try {
             // - verified_by_landlord remains 0
             // - payment_date remains NULL
             // - receipt_filename remains NULL
+            // Check if tenant has active additional spaces rented
+            $spacesStmt = $pdo->prepare("
+                SELECT space_name, monthly_fee 
+                FROM additional_spaces 
+                WHERE assigned_tenant_id = :tid AND status = 'occupied'
+                ORDER BY space_number ASC
+            ");
+            $spacesStmt->execute([':tid' => $payment['tenant_id']]);
+            $activeSpaces = $spacesStmt->fetchAll(PDO::FETCH_ASSOC);
+
+            $extraSpacesFee = 0.0;
+            $parts = [];
+            foreach ($activeSpaces as $as) {
+                $extraSpacesFee += (float)$as['monthly_fee'];
+                $parts[] = "{$as['space_name']} (₱" . number_format((float)$as['monthly_fee'], 2) . "/mo)";
+            }
+            $spacesBreakdown = !empty($parts) ? implode(' + ', $parts) : null;
+            $totalAmountDue = $rentAmount + $extraSpacesFee;
+
+            $vNotes = $extraSpacesFee > 0
+                ? "Rent: ₱" . number_format($rentAmount, 2) . " + Additional Space: ₱" . number_format($extraSpacesFee, 2) . " (" . $spacesBreakdown . ")"
+                : "Rent configured by Landlord. Awaiting tenant payment.";
+
             $updStmt = $pdo->prepare("
                 UPDATE payments 
                 SET payment_type = 'Rent',
+                    base_rent_amount = :base,
+                    additional_space_fee = :extra,
+                    additional_spaces_breakdown = :breakdown,
                     amount_due = :due,
                     billing_cycle = :cycle,
                     due_date = :due_date,
                     status = 'unpaid',
-                    verification_notes = 'Rent configured by Landlord. Awaiting tenant payment.'
+                    verification_notes = :vnotes
                 WHERE id = :id
             ");
             $updStmt->execute([
-                ':due' => $rentAmount,
+                ':base' => $rentAmount,
+                ':extra' => $extraSpacesFee,
+                ':breakdown' => $spacesBreakdown,
+                ':due' => $totalAmountDue,
                 ':cycle' => $billingCycle,
                 ':due_date' => $dueDate,
+                ':vnotes' => $vNotes,
                 ':id' => $paymentId
             ]);
 
@@ -490,6 +568,33 @@ try {
 
     if ($requestMethod === 'GET') {
         $currentUser = Auth::user();
+        $singleId = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+
+        if ($singleId > 0) {
+            $stmt = $pdo->prepare("
+                SELECT p.*, u.name AS tenant_name, u.username AS tenant_username, u.move_in_date, un.unit_number
+                FROM payments p
+                JOIN users u ON p.tenant_id = u.id
+                JOIN units un ON p.unit_id = un.id
+                WHERE p.id = :pid
+                LIMIT 1
+            ");
+            $stmt->execute([':pid' => $singleId]);
+            $singlePayment = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if ($singlePayment) {
+                echo json_encode([
+                    'status' => 'success',
+                    'payment' => $singlePayment
+                ]);
+                exit;
+            } else {
+                http_response_code(404);
+                echo json_encode(['status' => 'error', 'message' => 'Payment record not found.']);
+                exit;
+            }
+        }
+
         if (Auth::isTenant() && $currentUser) {
             $stmt = $pdo->prepare("
                 SELECT p.*, u.name AS tenant_name, u.username AS tenant_username, u.move_in_date, un.unit_number
@@ -506,6 +611,9 @@ try {
                 FROM payments p
                 JOIN users u ON p.tenant_id = u.id
                 JOIN units un ON p.unit_id = un.id
+                WHERE (u.is_archived = 0 OR u.is_archived IS NULL)
+                  AND u.is_active = 1
+                  AND u.deleted_at IS NULL
                 ORDER BY p.id DESC
             ");
         }

@@ -49,21 +49,28 @@ if ($userInitial === '') {
     $userInitial = 'U';
 }
 
+// Synchronize and auto-archive any moved-out tenants whose bills are fully settled
+require_once __DIR__ . '/includes/tenant_service.php';
+TenantService::syncMovedOutSettlements($pdo);
+
 // Fetch 3 Units
 $unitsStmt = $pdo->query("SELECT * FROM units ORDER BY unit_number ASC");
 $units = $unitsStmt->fetchAll();
 
-// Fetch All Active Tenants (Strictly seeded tenants only)
+// Fetch All Active Tenants (Strictly active, non-archived residents)
 $tenantsStmt = $pdo->query("
     SELECT u.id, u.unit_id, u.username, u.name, u.email, u.phone, 
            u.verification_status, u.id_type, u.id_photo_filename, u.verification_notes, u.id_submitted_at,
            u.birthday, u.emergency_contact, u.emergency_contact_name,
            u.emergency_contact_relationship, u.emergency_contact_phone,
-           u.move_in_date, u.total_occupants, u.adults_count, u.kids_count, u.created_at,
+           u.move_in_date, u.move_out_date, u.rental_status, u.total_occupants, u.adults_count, u.kids_count, u.created_at,
            un.unit_number, un.monthly_rent
     FROM users u
     JOIN units un ON u.unit_id = un.id
-    WHERE u.role = 'tenant' AND u.is_active = 1
+    WHERE u.role = 'tenant' 
+      AND u.is_active = 1
+      AND (u.is_archived = 0 OR u.is_archived IS NULL)
+      AND u.deleted_at IS NULL
     ORDER BY un.unit_number ASC, u.name ASC
 ");
 $allTenants = $tenantsStmt->fetchAll();
@@ -91,12 +98,32 @@ $tickets = $pdo->query("
     ORDER BY mt.created_at DESC
 ")->fetchAll();
 
-// Fetch Payments Ledger & Pending Reviews
+foreach ($tickets as &$tk) {
+    $st = strtolower((string)$tk['status']);
+    if ($st === 'open' || $st === 'pending') {
+        $tk['status'] = 'Pending';
+    } elseif ($st === 'in_progress' || $st === 'on-going' || $st === 'ongoing') {
+        $tk['status'] = 'On-Going';
+    } elseif ($st === 'resolved' || $st === 'closed' || $st === 'done') {
+        $tk['status'] = 'Done';
+    } else {
+        $tk['status'] = 'Pending';
+    }
+}
+unset($tk);
+
+$activeTickets = array_values(array_filter($tickets, fn($t) => in_array($t['status'], ['Pending', 'On-Going'])));
+$completedTickets = array_values(array_filter($tickets, fn($t) => $t['status'] === 'Done'));
+
+// Fetch Payments Ledger & Pending Reviews (Strictly active, non-archived tenants)
 $payments = $pdo->query("
-    SELECT p.*, u.name AS tenant_name, u.username AS tenant_username, u.move_in_date, un.unit_number
+    SELECT p.*, u.name AS tenant_name, u.username AS tenant_username, u.move_in_date, u.rental_status, un.unit_number
     FROM payments p
     JOIN users u ON p.tenant_id = u.id
     JOIN units un ON p.unit_id = un.id
+    WHERE (u.is_archived = 0 OR u.is_archived IS NULL)
+      AND u.is_active = 1
+      AND u.deleted_at IS NULL
     ORDER BY p.id DESC
 ")->fetchAll();
 
@@ -288,6 +315,7 @@ $pendingReviewCount = count($pendingReviewPayments);
     .priority-pill,
     .sidebar-nav-item,
     .profile-subnav-item,
+    .subview-tab-btn,
     .btn-remove-file,
     .btn-inspect-proof,
     .main-content button,
@@ -295,6 +323,129 @@ $pendingReviewCount = count($pendingReviewPayments);
     .dashboard-header-bar button {
       position: relative;
       z-index: 50;
+    }
+
+    .subview-tab-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 20px;
+      border-radius: var(--radius-md, 12px);
+      font-size: 13.5px;
+      font-weight: 700;
+      cursor: pointer;
+      border: 1.5px solid rgba(166, 180, 204, 0.4);
+      background: var(--clay-card-bg, #ffffff);
+      color: var(--text-muted, #64748b);
+      box-shadow: 2px 2px 5px rgba(166, 180, 204, 0.25), -2px -2px 5px rgba(255, 255, 255, 0.8);
+      transition: all 0.2s ease;
+    }
+    .subview-tab-btn:hover {
+      color: #0f172a;
+      border-color: rgba(99, 102, 241, 0.5);
+    }
+    .subview-tab-btn.active {
+      background: linear-gradient(135deg, #4f46e5, #4338ca);
+      color: #ffffff !important;
+      border-color: #4338ca;
+      box-shadow: 0 4px 12px rgba(79, 70, 229, 0.35);
+    }
+    .subview-tab-btn.active .clay-badge {
+      background: rgba(255, 255, 255, 0.25) !important;
+      color: #ffffff !important;
+    }
+    .clickable-ticket-row {
+      cursor: pointer !important;
+      transition: background-color 0.15s ease, transform 0.15s ease;
+    }
+    .clickable-ticket-row:hover {
+      background: rgba(238, 242, 255, 0.85) !important;
+    }
+
+    /* Animated Maintenance Details Modal (Fade-In & Scale-Up Transition) */
+    #ticketDetailsModal {
+      display: flex !important;
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.6);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      z-index: 10000;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transition: opacity 0.24s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.24s ease;
+    }
+    #ticketDetailsModal.open,
+    #ticketDetailsModal.active {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+    }
+    #ticketDetailsModal .ticket-details-modal-box {
+      width: 100%;
+      max-width: 680px;
+      max-height: 90vh;
+      overflow-y: auto;
+      background: var(--clay-card-bg, #ffffff);
+      border-radius: var(--radius-xl, 20px);
+      box-shadow: 0 20px 50px -10px rgba(79, 70, 229, 0.3), 0 10px 25px -5px rgba(15, 23, 42, 0.15);
+      border: 1.5px solid rgba(166, 180, 204, 0.35);
+      padding: 28px;
+      transform: scale(0.92) translateY(14px);
+      opacity: 0;
+      transition: transform 0.26s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.22s ease;
+    }
+    #ticketDetailsModal.open .ticket-details-modal-box,
+    #ticketDetailsModal.active .ticket-details-modal-box {
+      transform: scale(1) translateY(0);
+      opacity: 1;
+    }
+
+    /* Animated Archived Tenant Details Modal (Fade-In & Scale-Up Transition) */
+    #archivedTenantDetailsModal {
+      display: flex !important;
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.6);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      z-index: 10000;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transition: opacity 0.24s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.24s ease;
+    }
+    #archivedTenantDetailsModal.open,
+    #archivedTenantDetailsModal.active {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+    }
+    #archivedTenantDetailsModal .archived-modal-box {
+      width: 100%;
+      max-width: 760px;
+      max-height: 90vh;
+      overflow-y: auto;
+      background: var(--clay-card-bg, #ffffff);
+      border-radius: var(--radius-xl, 20px);
+      box-shadow: 0 20px 50px -10px rgba(79, 70, 229, 0.3), 0 10px 25px -5px rgba(15, 23, 42, 0.15);
+      border: 1.5px solid rgba(166, 180, 204, 0.35);
+      padding: 28px;
+      transform: scale(0.92) translateY(14px);
+      opacity: 0;
+      transition: transform 0.26s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.22s ease;
+    }
+    #archivedTenantDetailsModal.open .archived-modal-box,
+    #archivedTenantDetailsModal.active .archived-modal-box {
+      transform: scale(1) translateY(0);
+      opacity: 1;
     }
   </style>
 </head>
@@ -623,13 +774,24 @@ $pendingReviewCount = count($pendingReviewPayments);
 
       </section>
 
-      <!-- SECTION 2: TENANT ACTIVE DIRECTORY (3 CLAYMORPHIC FOLDERS INTERFACE) -->
-      <!-- Requirement: Main view displays 3 claymorphic Folders ("Unit 101", "Unit 102", "Unit 103").
-           The landlord must click into a specific unit's folder to view personal info & deletion buttons. -->
+      <!-- SECTION 2: TENANT DIRECTORY (ACTIVE TENANTS + ARCHIVED TENANTS) -->
       <section id="sectionDirectory" class="app-view-section">
-        
-        <!-- FOLDERS VIEW (Default Directory Landing: Unit 101, Unit 102, Unit 103) -->
-        <div id="directoryFoldersView">
+
+        <!-- DIRECTORY VIEW TABS: ACTIVE TENANTS VS ARCHIVED TENANTS -->
+        <div class="directory-view-tabs" style="display: flex; gap: 10px; margin-bottom: 22px;">
+          <button type="button" class="subview-tab-btn active" id="btnTabActiveDirectory" onclick="switchDirectoryTab('active')">
+            👥 Active Tenants
+          </button>
+          <button type="button" class="subview-tab-btn" id="btnTabArchivedDirectory" onclick="switchDirectoryTab('archived')">
+            📁 Archived Tenants 
+            <span id="directoryArchivedCountBadge" class="clay-badge" style="font-size: 11px; padding: 2px 8px; margin-left: 6px; background: #e2e8f0; color: #475569;">0</span>
+          </button>
+        </div>
+
+        <!-- 1. ACTIVE TENANTS VIEW (Folders + Detail) -->
+        <div id="directoryActiveView">
+          <!-- FOLDERS VIEW (Default Directory Landing: Unit 101, Unit 102, Unit 103) -->
+          <div id="directoryFoldersView">
           <div class="dashboard-header-bar">
             <div class="dashboard-title-group">
               <h1>Tenant Directory Folders</h1>
@@ -738,7 +900,12 @@ $pendingReviewCount = count($pendingReviewPayments);
                               <div style="width: 32px; height: 32px; border-radius: 10px; background: linear-gradient(135deg, #a5b4fc, #818cf8); color: #fff; font-weight: 800; font-size: 13px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
                                 <?= strtoupper(substr($t['name'], 0, 1)) ?>
                               </div>
-                              <div style="font-weight: 800; color: #0f172a;"><?= htmlspecialchars($t['name']) ?></div>
+                              <div style="font-weight: 800; color: #0f172a; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                                <span><?= htmlspecialchars($t['name']) ?></span>
+                                <?php if (($t['rental_status'] ?? 'active') === 'moved_out'): ?>
+                                  <span class="clay-badge" style="background: #fef3c7; color: #92400e; font-size: 10px; font-weight: 800; padding: 2px 7px;">MOVED OUT (PENDING SETTLEMENT)</span>
+                                <?php endif; ?>
+                              </div>
                             </div>
                           </td>
                           <td>
@@ -771,104 +938,248 @@ $pendingReviewCount = count($pendingReviewPayments);
 
           </div>
           <?php endforeach; ?>
-        </div>
+        </div> <!-- /#directoryFolderDetailView -->
+        </div> <!-- /#directoryActiveView -->
+
+        <!-- 2. ARCHIVED TENANTS VIEW (Integrated inside Tenant Directory) -->
+        <div id="directoryArchivedView" style="display: none;">
+          <div class="dashboard-header-bar">
+            <div class="dashboard-title-group">
+              <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                <h1 style="font-size: 24px; font-weight: 800; color: #0f172a; margin: 0;">Archived Tenant Accounts</h1>
+                <span id="archivedTenantCountBadge" class="clay-badge" style="font-size: 12px; padding: 4px 12px; background: #e2e8f0; color: #475569; font-weight: 700;">0 Archived Records</span>
+              </div>
+              <p style="font-size: 13px; color: var(--text-muted); margin-top: 3px;">Preserved repository of deleted and moved-out tenant records with historical billing, receipts, and maintenance logs.</p>
+            </div>
+            <div class="action-btn-group" style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+              <div style="position: relative; min-width: 280px;">
+                <input type="text" id="archivedTenantSearchInput" class="clay-input" placeholder="Search by name, email, or unit..." style="padding-left: 36px; font-size: 13px;" oninput="filterArchivedTenants(this.value)">
+                <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" style="width: 17px; height: 17px; position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: #94a3b8; pointer-events: none;">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+                </svg>
+              </div>
+              <button type="button" class="clay-btn clay-btn-secondary" onclick="loadArchivedTenants()" title="Refresh Archived Records" style="padding: 9px 14px;">
+                <span>🔄 Refresh</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Archived Notice Banner -->
+          <div class="alert-clay alert-clay-info" style="margin-bottom: 22px; padding: 14px 20px; background: #f8fafc; border: 1.5px solid #e2e8f0; border-radius: var(--radius-md);">
+            <div class="alert-icon-clay" style="color: #64748b;">
+              <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" style="width: 20px; height: 20px;">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 0 1 1.063.852l-.708 2.836a.75.75 0 0 0 1.063.853l.041-.021M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-3.75h.008v.008H12V8.25Z" />
+              </svg>
+            </div>
+            <div class="alert-body-clay" style="font-size: 13px; color: #475569; line-height: 1.5;">
+              <strong>Data Integrity Guarantee:</strong> Deleting a tenant account preserves all payment receipts, billing history, and maintenance records permanently for accounting and auditing.
+            </div>
+          </div>
+
+          <!-- Archived Tenants Table Card -->
+          <div class="clay-card" style="padding: 0; overflow: hidden; border-radius: var(--radius-lg);">
+            <div class="table-responsive" style="overflow-x: auto;">
+              <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 13.5px;">
+                <thead>
+                  <tr style="border-bottom: 2px solid rgba(166, 180, 204, 0.3); color: var(--text-muted); font-weight: 700; background: rgba(248, 250, 252, 0.6);">
+                    <th style="padding: 14px 16px;">Tenant Name</th>
+                    <th style="padding: 14px 16px;">Unit Number</th>
+                    <th style="padding: 14px 16px;">Email Address</th>
+                    <th style="padding: 14px 16px;">Contact Number</th>
+                    <th style="padding: 14px 16px;">Date of Moving In</th>
+                    <th style="padding: 14px 16px;">Date Archived</th>
+                  </tr>
+                </thead>
+                <tbody id="archivedTenantsTableBody">
+                  <tr>
+                    <td colspan="6" style="text-align: center; padding: 36px 14px; color: var(--text-muted); font-size: 13.5px;">
+                      <span class="clay-spinner" style="width: 18px; height: 18px; border-width: 2px; vertical-align: middle; margin-right: 8px;"></span>
+                      Loading archived tenant accounts...
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div> <!-- /#directoryArchivedView -->
 
       </section>
 
-      <!-- SECTION 3: MAINTENANCE TICKETS RESOLVER -->
+      <!-- SECTION 3: MAINTENANCE TICKETS (ACTIVE / ON-GOING VS COMPLETED) -->
       <section id="sectionTickets" class="app-view-section">
+
         <div class="dashboard-header-bar">
           <div class="dashboard-title-group">
-            <h1>Maintenance Dispatches Across Units</h1>
-            <p>Update repair work order statuses and enter actual repair invoice costs</p>
+            <h1>Maintenance Tickets</h1>
+            <p>Track, manage, and dispatch maintenance and repair requests across all units</p>
           </div>
         </div>
 
-        <div class="clay-card">
-          <div style="overflow-x: auto;">
-            <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 13.5px;">
-              <thead>
-                <tr style="border-bottom: 2px solid rgba(166, 180, 204, 0.3); color: var(--text-muted); font-weight: 700;">
-                  <th style="padding: 12px 14px;">Ticket #</th>
-                  <th style="padding: 12px 14px;">Tenant</th>
-                  <th style="padding: 12px 14px;">Unit</th>
-                  <th style="padding: 12px 14px;">Category</th>
-                  <th style="padding: 12px 14px;">Issue Title</th>
-                  <th style="padding: 12px 14px;">Date Submitted</th>
-                  <th style="padding: 12px 14px;">Priority</th>
-                  <th style="padding: 12px 14px;">Status</th>
-                  <th style="padding: 12px 14px;">Actual Cost</th>
-                  <th style="padding: 12px 14px; text-align: center;">Action</th>
-                </tr>
-              </thead>
-              <tbody id="maintenanceTicketsTableBody">
-                <?php if (empty($tickets)): ?>
-                <tr>
-                  <td colspan="10" style="text-align: center; padding: 32px 14px; color: var(--text-muted); font-size: 14px;">
-                    No maintenance tickets currently logged.
-                  </td>
-                </tr>
-                <?php else: ?>
-                <?php foreach ($tickets as $tk): ?>
-                <tr class="clickable-ticket-row ticket-record-row"
-                    id="ticket-row-<?= $tk['id'] ?>"
-                    style="border-bottom: 1px solid rgba(166, 180, 204, 0.15); cursor: pointer;"
-                    onclick="openTicketDetailsModal(<?= htmlspecialchars(json_encode($tk), ENT_QUOTES, 'UTF-8') ?>)"
-                    title="Click to view complete ticket details, uploaded photos, and reply">
-                  <td style="padding: 12px 14px; font-weight: 700; color: #4338ca;">#MT-<?= str_pad((string)$tk['id'], 4, '0', STR_PAD_LEFT) ?></td>
-                  <td style="padding: 12px 14px; font-weight: 600; color: #0f172a;"><?= htmlspecialchars($tk['tenant_name']) ?></td>
-                  <td style="padding: 12px 14px;">
-                    <span class="clay-badge" style="background: #e0e7ff; color: #4338ca; font-weight: 800; font-size: 11px;">
-                      <?= htmlspecialchars($tk['unit_number']) ?>
-                    </span>
-                  </td>
-                  <td style="padding: 12px 14px;"><span class="clay-badge badge-<?= strtolower($tk['category']) ?>"><?= $tk['category'] ?></span></td>
-                  <td style="padding: 12px 14px;">
-                    <div style="font-weight: 700; color: #1e293b;"><?= htmlspecialchars($tk['title']) ?></div>
-                    <div style="font-size: 12px; color: var(--text-muted);"><?= htmlspecialchars(substr($tk['description'], 0, 50)) ?><?= strlen($tk['description']) > 50 ? '...' : '' ?></div>
-                    <?php if (!empty($tk['photo_path'])): ?>
-                      <div style="margin-top: 4px; display: flex; gap: 4px; flex-wrap: wrap;">
-                        <?php 
-                          $pList = explode(',', $tk['photo_path']);
-                          foreach ($pList as $pIdx => $pItem): 
-                            $pItem = trim($pItem);
-                            if (!$pItem) continue;
-                        ?>
-                          <a href="<?= htmlspecialchars($pItem) ?>" target="_blank" onclick="event.stopPropagation();" class="btn-inspect-proof" style="font-size: 10.5px; padding: 2px 7px;">
-                            📷 Photo <?= count($pList) > 1 ? ($pIdx + 1) : '' ?>
-                          </a>
-                        <?php endforeach; ?>
-                      </div>
-                    <?php endif; ?>
-                  </td>
-                  <td style="padding: 12px 14px; font-size: 12.5px; color: var(--text-muted); white-space: nowrap;">
-                    <?= date('M j, Y', strtotime($tk['created_at'])) ?>
-                  </td>
-                  <td style="padding: 12px 14px;"><span class="clay-badge badge-<?= $tk['priority'] ?>"><?= strtoupper($tk['priority']) ?></span></td>
-                  <td style="padding: 12px 14px;" onclick="event.stopPropagation();">
-                    <select class="clay-select" style="padding: 6px 12px; font-size: 12px;" onchange="updateTicket(<?= $tk['id'] ?>, this.value, <?= (float)($tk['actual_cost'] ?? 0) ?>)">
-                      <option value="open" <?= $tk['status'] === 'open' ? 'selected' : '' ?>>Open</option>
-                      <option value="in_progress" <?= $tk['status'] === 'in_progress' ? 'selected' : '' ?>>In Progress</option>
-                      <option value="resolved" <?= $tk['status'] === 'resolved' ? 'selected' : '' ?>>Resolved</option>
-                      <option value="closed" <?= $tk['status'] === 'closed' ? 'selected' : '' ?>>Closed</option>
-                    </select>
-                  </td>
-                  <td style="padding: 12px 14px; font-weight: 700;" onclick="event.stopPropagation();">
-                    ₱<input type="number" class="clay-input" value="<?= number_format((float)$tk['actual_cost'], 2, '.', '') ?>" step="0.01" style="width: 95px; padding: 4px 8px; font-size: 12.5px; display: inline-block;" onchange="updateTicket(<?= $tk['id'] ?>, '<?= $tk['status'] ?>', this.value)">
-                  </td>
-                  <td style="padding: 12px 14px; text-align: center;" onclick="event.stopPropagation();">
-                    <button type="button" class="clay-btn btn-secondary" style="font-size: 11.5px; padding: 5px 12px;" onclick="openTicketDetailsModal(<?= htmlspecialchars(json_encode($tk), ENT_QUOTES, 'UTF-8') ?>)">
-                      💬 View / Reply
-                    </button>
-                  </td>
-                </tr>
-                <?php endforeach; ?>
-                <?php endif; ?>
-              </tbody>
-            </table>
+        <!-- TICKET SUB-NAVIGATION: ACTIVE / ON-GOING VS COMPLETED -->
+        <div class="ticket-view-tabs" style="display: flex; gap: 10px; margin-bottom: 20px;">
+            <button type="button" class="subview-tab-btn active" id="btnTabActiveTickets" onclick="switchTicketTab('active')">
+              🛠️ Active / On-Going Maintenance 
+              <span id="activeTicketCountBadge" class="clay-badge badge-pending" style="font-size: 11.5px; padding: 2px 9px; margin-left: 6px;">
+                <?= count($activeTickets) ?>
+              </span>
+            </button>
+            <button type="button" class="subview-tab-btn" id="btnTabCompletedTickets" onclick="switchTicketTab('completed')">
+              ✅ Completed Maintenance 
+              <span id="completedTicketCountBadge" class="clay-badge badge-done" style="font-size: 11.5px; padding: 2px 9px; margin-left: 6px;">
+                <?= count($completedTickets) ?>
+              </span>
+            </button>
           </div>
-        </div>
-      </section>
+
+          <!-- PANE 1: ACTIVE / ON-GOING MAINTENANCE -->
+          <div id="paneActiveTickets" class="clay-card" style="padding: 0; overflow: hidden; border-radius: var(--radius-lg);">
+            <div style="overflow-x: auto;">
+              <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 13.5px;">
+                <thead>
+                  <tr style="border-bottom: 2px solid rgba(166, 180, 204, 0.3); color: var(--text-muted); font-weight: 700; background: rgba(248, 250, 252, 0.6);">
+                    <th style="padding: 14px 16px;">Ticket Number</th>
+                    <th style="padding: 14px 16px;">Tenant Name</th>
+                    <th style="padding: 14px 16px;">Unit</th>
+                    <th style="padding: 14px 16px;">Issue Description</th>
+                    <th style="padding: 14px 16px;">Date Submitted</th>
+                    <th style="padding: 14px 16px;">Priority</th>
+                    <th style="padding: 14px 16px;">Status</th>
+                  </tr>
+                </thead>
+                <tbody id="activeTicketsTableBody">
+                  <?php if (empty($activeTickets)): ?>
+                  <tr id="emptyActiveTicketsRow">
+                    <td colspan="7" style="text-align: center; padding: 42px 14px; color: var(--text-muted); font-size: 14px;">
+                      <div style="font-size: 32px; margin-bottom: 8px;">🎉</div>
+                      <strong>No active or pending maintenance requests.</strong>
+                      <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">All reported issues are currently resolved.</div>
+                    </td>
+                  </tr>
+                  <?php else: ?>
+                  <?php foreach ($activeTickets as $tk): ?>
+                  <tr class="clickable-ticket-row ticket-record-row"
+                      id="ticket-row-<?= $tk['id'] ?>"
+                      data-ticket-id="<?= $tk['id'] ?>"
+                      style="border-bottom: 1px solid rgba(166, 180, 204, 0.15);"
+                      onclick="openTicketDetailsModal(<?= htmlspecialchars(json_encode($tk), ENT_QUOTES, 'UTF-8') ?>)"
+                      title="Click to view maintenance ticket details">
+                    <td style="padding: 14px 16px; font-weight: 700; color: #4338ca; white-space: nowrap;">#MT-<?= str_pad((string)$tk['id'], 4, '0', STR_PAD_LEFT) ?></td>
+                    <td style="padding: 14px 16px; font-weight: 600; color: #0f172a; white-space: nowrap;"><?= htmlspecialchars($tk['tenant_name']) ?></td>
+                    <td style="padding: 14px 16px; white-space: nowrap;">
+                      <span class="clay-badge" style="background: #e0e7ff; color: #4338ca; font-weight: 800; font-size: 11px;">
+                        <?= htmlspecialchars($tk['unit_number']) ?>
+                      </span>
+                    </td>
+                    <td style="padding: 14px 16px; max-width: 320px;">
+                      <div style="font-weight: 600; color: #1e293b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="<?= htmlspecialchars($tk['title']) ?>">
+                        <?= htmlspecialchars($tk['title']) ?>
+                      </div>
+                      <?php if (!empty($tk['description'])): ?>
+                        <div style="font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px;" title="<?= htmlspecialchars($tk['description']) ?>">
+                          <?= htmlspecialchars(mb_strimwidth($tk['description'], 0, 60, '...')) ?>
+                        </div>
+                      <?php endif; ?>
+                    </td>
+                    <td style="padding: 14px 16px; font-size: 12.5px; color: var(--text-muted); white-space: nowrap;">
+                      <?= date('M j, Y', strtotime($tk['created_at'])) ?>
+                    </td>
+                    <td style="padding: 14px 16px; white-space: nowrap;">
+                      <span class="clay-badge badge-<?= strtolower($tk['priority']) ?>" style="font-weight: 700; font-size: 11px; padding: 3px 8px;">
+                        <?= ucfirst(strtolower($tk['priority'])) ?>
+                      </span>
+                    </td>
+                    <td style="padding: 14px 16px; white-space: nowrap;">
+                      <?php 
+                        $stClass = 'badge-pending';
+                        if ($tk['status'] === 'Done' || $tk['status'] === 'resolved' || $tk['status'] === 'closed') {
+                          $stClass = 'badge-done';
+                        } elseif ($tk['status'] === 'On-Going' || $tk['status'] === 'in_progress') {
+                          $stClass = 'badge-ongoing';
+                        }
+                      ?>
+                      <span id="ticket-badge-<?= $tk['id'] ?>" class="clay-badge <?= $stClass ?>" style="font-weight: 700; font-size: 11.5px; padding: 4px 10px;">
+                        <?= htmlspecialchars($tk['status']) ?>
+                      </span>
+                    </td>
+                  </tr>
+                  <?php endforeach; ?>
+                  <?php endif; ?>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- PANE 2: COMPLETED MAINTENANCE -->
+          <div id="paneCompletedTickets" class="clay-card" style="padding: 0; overflow: hidden; border-radius: var(--radius-lg); display: none;">
+            <div style="overflow-x: auto;">
+              <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 13.5px;">
+                <thead>
+                  <tr style="border-bottom: 2px solid rgba(166, 180, 204, 0.3); color: var(--text-muted); font-weight: 700; background: rgba(248, 250, 252, 0.6);">
+                    <th style="padding: 14px 16px;">Ticket Number</th>
+                    <th style="padding: 14px 16px;">Tenant Name</th>
+                    <th style="padding: 14px 16px;">Unit</th>
+                    <th style="padding: 14px 16px;">Issue Description</th>
+                    <th style="padding: 14px 16px;">Date Submitted</th>
+                    <th style="padding: 14px 16px;">Priority</th>
+                    <th style="padding: 14px 16px;">Status</th>
+                  </tr>
+                </thead>
+                <tbody id="completedTicketsTableBody">
+                  <?php if (empty($completedTickets)): ?>
+                  <tr id="emptyCompletedTicketsRow">
+                    <td colspan="7" style="text-align: center; padding: 42px 14px; color: var(--text-muted); font-size: 14px;">
+                      <div style="font-size: 32px; margin-bottom: 8px;">📋</div>
+                      <strong>No completed maintenance records yet.</strong>
+                      <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Resolved tickets will be archived here for historical review.</div>
+                    </td>
+                  </tr>
+                  <?php else: ?>
+                  <?php foreach ($completedTickets as $tk): ?>
+                  <tr class="clickable-ticket-row ticket-record-row"
+                      id="ticket-row-<?= $tk['id'] ?>"
+                      data-ticket-id="<?= $tk['id'] ?>"
+                      style="border-bottom: 1px solid rgba(166, 180, 204, 0.15);"
+                      onclick="openTicketDetailsModal(<?= htmlspecialchars(json_encode($tk), ENT_QUOTES, 'UTF-8') ?>)"
+                      title="Click to view maintenance ticket details">
+                    <td style="padding: 14px 16px; font-weight: 700; color: #4338ca; white-space: nowrap;">#MT-<?= str_pad((string)$tk['id'], 4, '0', STR_PAD_LEFT) ?></td>
+                    <td style="padding: 14px 16px; font-weight: 600; color: #0f172a; white-space: nowrap;"><?= htmlspecialchars($tk['tenant_name']) ?></td>
+                    <td style="padding: 14px 16px; white-space: nowrap;">
+                      <span class="clay-badge" style="background: #e0e7ff; color: #4338ca; font-weight: 800; font-size: 11px;">
+                        <?= htmlspecialchars($tk['unit_number']) ?>
+                      </span>
+                    </td>
+                    <td style="padding: 14px 16px; max-width: 320px;">
+                      <div style="font-weight: 600; color: #1e293b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="<?= htmlspecialchars($tk['title']) ?>">
+                        <?= htmlspecialchars($tk['title']) ?>
+                      </div>
+                      <?php if (!empty($tk['description'])): ?>
+                        <div style="font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px;" title="<?= htmlspecialchars($tk['description']) ?>">
+                          <?= htmlspecialchars(mb_strimwidth($tk['description'], 0, 60, '...')) ?>
+                        </div>
+                      <?php endif; ?>
+                    </td>
+                    <td style="padding: 14px 16px; font-size: 12.5px; color: var(--text-muted); white-space: nowrap;">
+                      <?= date('M j, Y', strtotime($tk['created_at'])) ?>
+                    </td>
+                    <td style="padding: 14px 16px; white-space: nowrap;">
+                      <span class="clay-badge badge-<?= strtolower($tk['priority']) ?>" style="font-weight: 700; font-size: 11px; padding: 3px 8px;">
+                        <?= ucfirst(strtolower($tk['priority'])) ?>
+                      </span>
+                    </td>
+                    <td style="padding: 14px 16px; white-space: nowrap;">
+                      <span id="ticket-badge-<?= $tk['id'] ?>" class="clay-badge badge-done" style="font-weight: 700; font-size: 11.5px; padding: 4px 10px;">
+                        <?= htmlspecialchars($tk['status']) ?>
+                      </span>
+                    </td>
+                  </tr>
+                  <?php endforeach; ?>
+                  <?php endif; ?>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+        </section>
 
       <!-- SECTION 4: MANUAL PAYMENT VERIFICATION & AUDIT -->
       <section id="sectionPayments" class="app-view-section">
@@ -1691,6 +2002,107 @@ $pendingReviewCount = count($pendingReviewPayments);
   </div>
 
   <!-- =====================================================================
+       MODAL: ANIMATED MAINTENANCE TICKET DETAILS & STATUS MANAGEMENT
+       ===================================================================== -->
+  <div class="modal-backdrop" id="ticketDetailsModal" onclick="handleTicketModalBackdropClick(event)">
+    <div class="ticket-details-modal-box" onclick="event.stopPropagation()">
+      
+      <!-- Modal Header -->
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 18px; border-bottom: 1px solid rgba(166, 180, 204, 0.25); padding-bottom: 14px;">
+        <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+          <span class="clay-badge" id="mdlTicketNumberBadge" style="background: #e0e7ff; color: #4338ca; font-weight: 800; font-size: 13.5px; padding: 4px 11px;">#MT-0000</span>
+          <div>
+            <h2 id="mdlTicketTitle" style="font-size: 18px; font-weight: 800; color: #0f172a; margin: 0; line-height: 1.3;">Maintenance Request</h2>
+            <p style="font-size: 12px; color: var(--text-muted); margin: 3px 0 0 0;">
+              Submitted on <span id="mdlDateSubmitted" style="font-weight: 600; color: #334155;">-</span>
+            </p>
+          </div>
+        </div>
+        <button type="button" class="btn-remove-file" onclick="closeTicketDetailsModal()" title="Close details (Esc)" style="cursor: pointer; font-size: 18px; padding: 4px 8px; border-radius: 8px; border: none; background: transparent; color: var(--text-muted);">✕</button>
+      </div>
+
+      <!-- Badges row: Category, Priority, Current Status -->
+      <div style="display: flex; gap: 8px; margin-bottom: 18px; flex-wrap: wrap; align-items: center;">
+        <span class="clay-badge" id="mdlCategoryBadge" style="font-size: 11.5px; font-weight: 700; padding: 4px 10px;">Category: General</span>
+        <span class="clay-badge" id="mdlPriorityBadge" style="font-size: 11.5px; font-weight: 700; padding: 4px 10px;">Priority: Medium</span>
+        <span class="clay-badge" id="mdlStatusBadge" style="font-size: 11.5px; font-weight: 700; padding: 4px 10px;">Status: Pending</span>
+      </div>
+
+      <!-- Scrollable content area -->
+      <div style="display: flex; flex-direction: column; gap: 16px;">
+        
+        <!-- 1. Tenant & Unit Info Grid -->
+        <div style="background: var(--clay-input-bg, #f8fafc); border-radius: var(--radius-md, 12px); padding: 14px 16px; box-shadow: var(--clay-sunken-shadow);">
+          <div style="font-size: 12.5px; font-weight: 800; color: #0f172a; margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">
+            <span>👤</span> Tenant &amp; Unit Information
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px;">
+            <div><strong style="color: var(--text-muted);">Tenant Name:</strong> <span id="mdlTenantName" style="font-weight: 700; color: #0f172a;">-</span></div>
+            <div><strong style="color: var(--text-muted);">Assigned Unit:</strong> <span class="clay-badge" id="mdlUnitBadge" style="background: #e0e7ff; color: #4338ca; font-weight: 800; font-size: 11.5px; padding: 2px 8px;">-</span></div>
+            <div style="grid-column: 1 / -1;"><strong style="color: var(--text-muted);">Email Address:</strong> <span id="mdlTenantEmail" style="font-weight: 600; color: #334155;">-</span></div>
+          </div>
+        </div>
+
+        <!-- 2. Complete Issue Description -->
+        <div>
+          <div style="font-size: 12.5px; font-weight: 800; color: #0f172a; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
+            <span>📝</span> Complete Issue Description
+          </div>
+          <div style="background: var(--clay-input-bg, #f8fafc); border-radius: var(--radius-md, 12px); padding: 14px 16px; box-shadow: var(--clay-sunken-shadow); min-height: 80px;">
+            <p id="mdlDescription" style="font-size: 13.5px; color: #1e293b; line-height: 1.6; white-space: pre-wrap; margin: 0;"></p>
+          </div>
+        </div>
+
+        <!-- 3. Attached Images or Supporting Photos -->
+        <div>
+          <div style="font-size: 12.5px; font-weight: 800; color: #0f172a; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
+            <span>📷</span> Attached Images &amp; Supporting Photos
+          </div>
+          <div id="mdlPhotosContainer" style="display: flex; gap: 12px; flex-wrap: wrap;"></div>
+          <div id="mdlNoPhotosNotice" style="display: none; background: #f8fafc; border: 1.5px dashed #cbd5e1; border-radius: var(--radius-md, 12px); padding: 18px; text-align: center; color: var(--text-muted); font-size: 12.5px;">
+            No photos attached to this maintenance request.
+          </div>
+        </div>
+
+        <!-- 4. Dedicated Status Update Section Inside the Modal -->
+        <div style="background: #ffffff; border: 1.5px solid rgba(99, 102, 241, 0.35); border-radius: var(--radius-md, 12px); padding: 16px; box-shadow: 0 4px 14px rgba(99, 102, 241, 0.08);">
+          <div style="font-size: 13px; font-weight: 800; color: #0f172a; margin-bottom: 12px; display: flex; align-items: center; gap: 6px;">
+            <span>⚙️</span> Update Maintenance Status
+          </div>
+          <form id="formModalStatusUpdate" onsubmit="event.preventDefault(); submitModalStatusUpdate();">
+            <input type="hidden" id="mdlTicketId" value="">
+
+            <div class="form-group" style="margin-bottom: 12px;">
+              <label class="form-label" for="mdlSelectStatus" style="font-weight: 700; color: #0f172a; font-size: 12.5px;">Status *</label>
+              <select id="mdlSelectStatus" class="clay-select" style="width: 100%; font-weight: 700; font-size: 13.5px; padding: 9px 12px;">
+                <option value="Pending">⏳ Pending</option>
+                <option value="On-Going">🔧 On-Going</option>
+                <option value="Done">✅ Done</option>
+              </select>
+              <p style="font-size: 11.5px; color: var(--text-muted); margin: 4px 0 0 2px;">
+                Setting status to <strong>Done</strong> automatically moves this ticket to Completed Maintenance.
+              </p>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 14px;">
+              <label class="form-label" for="mdlResolutionNotes" style="font-weight: 700; color: #0f172a; font-size: 12.5px;">Owner Remarks / Instructions (Optional)</label>
+              <textarea id="mdlResolutionNotes" class="clay-textarea" rows="3" placeholder="Add instructions, contractor notes, or an update for the tenant..." style="font-size: 13px;"></textarea>
+            </div>
+
+            <div style="display: flex; gap: 10px; justify-content: flex-end;">
+              <button type="button" class="clay-btn clay-btn-secondary" onclick="closeTicketDetailsModal()" style="padding: 9px 16px; font-size: 13px;">Cancel</button>
+              <button type="submit" id="btnModalSubmitStatus" class="clay-btn clay-btn-primary" style="padding: 9px 20px; font-size: 13px; font-weight: 800;">
+                <span>💾 Save Changes</span>
+              </button>
+            </div>
+          </form>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- =====================================================================
        MODAL: EXPANDED TENANT DETAILS & PRIVACY (LANDLORD UI)
        Displays: Complete Info (Emergency contacts, 1 family occupant breakdown).
        ID Display: Tenant's uploaded Valid ID image is immediately visible.
@@ -1746,14 +2158,20 @@ $pendingReviewCount = count($pendingReviewPayments);
 
       <!-- 2. Personal & Contact Details -->
       <div style="background: var(--clay-input-bg); border-radius: var(--radius-md); padding: 14px; box-shadow: var(--clay-sunken-shadow); margin-bottom: 16px;">
-        <div style="font-size: 13px; font-weight: 800; color: #0f172a; margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">
-          <span>📋</span> Personal &amp; Contact Information
+        <div style="font-size: 13px; font-weight: 800; color: #0f172a; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span>📋</span> Personal &amp; Contact Information
+          </div>
+          <span id="tdRentalStatusBadge" class="clay-badge badge-paid" style="font-size: 11px; padding: 2px 8px;">Active Resident</span>
         </div>
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px;">
           <div><strong style="color: var(--text-muted);">Birthday:</strong> <span id="tdBirthday" style="font-weight: 700; color: #0f172a;">N/A</span></div>
           <div><strong style="color: var(--text-muted);">Moved In:</strong> <span id="tdMoveIn" style="font-weight: 700; color: #0f172a;">N/A</span></div>
           <div style="grid-column: 1 / -1;"><strong style="color: var(--text-muted);">Email Address:</strong> <span id="tdEmail" style="font-weight: 700; color: #0f172a;">email@example.com</span></div>
           <div style="grid-column: 1 / -1;"><strong style="color: var(--text-muted);">Phone Number:</strong> <span id="tdPhone" style="font-weight: 700; color: #0f172a;">+63 900 000 0000</span></div>
+        </div>
+        <div id="tdMovedOutNotice" style="display: none; margin-top: 10px; padding: 10px 12px; background: #fef3c7; border: 1px solid #fde68a; border-radius: 8px; font-size: 12px; color: #92400e;">
+          <strong>⚠️ Move-Out Status:</strong> This tenant is officially marked as Moved Out. Unpaid bills or pending payment proofs remain. The account and payment records will stay active until all balances are fully settled.
         </div>
       </div>
 
@@ -1793,92 +2211,140 @@ $pendingReviewCount = count($pendingReviewPayments);
   </div>
 
   <!-- =====================================================================
-       MODAL: MAINTENANCE TICKET DETAILS, REPLY & STATUS UPDATE
+       MODAL: ANIMATED ARCHIVED TENANT DETAILS & RESTORATION
        ===================================================================== -->
-  <div class="modal-backdrop" id="ticketReplyModal">
-    <div class="clay-modal" style="max-width: 620px; width: 95%; max-height: 90vh; overflow-y: auto;">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; border-bottom: 1px solid rgba(166, 180, 204, 0.2); padding-bottom: 12px;">
-        <div style="display: flex; align-items: center; gap: 10px;">
-          <span class="clay-badge" id="replyTicketIdLabel" style="background: #e0e7ff; color: #4338ca; font-weight: 800; font-size: 13px;">#MT-0001</span>
+  <div class="modal-backdrop" id="archivedTenantDetailsModal" onclick="handleArchivedModalBackdropClick(event)">
+    <div class="archived-modal-box" onclick="event.stopPropagation()">
+      <input type="hidden" id="archivedModalTenantId" value="">
+
+      <!-- Header: Avatar, Name, Username, Archived Badge, Close Button -->
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; border-bottom: 1px solid rgba(166, 180, 204, 0.25); padding-bottom: 16px;">
+        <div style="display: flex; align-items: center; gap: 14px;">
+          <div id="archivedModalAvatar" style="width: 50px; height: 50px; border-radius: 14px; background: linear-gradient(135deg, #64748b, #475569); color: #fff; font-weight: 800; font-size: 20px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; box-shadow: 0 4px 10px rgba(0,0,0,0.1);">
+            T
+          </div>
           <div>
-            <h2 style="font-size: 19px; font-weight: 800; color: #0f172a; margin: 0;" id="replyTicketTitle">Maintenance Request Details</h2>
-            <p style="font-size: 12px; color: var(--text-muted); margin: 2px 0 0 0;">Inspect complete problem description, photos, and update status</p>
+            <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+              <h2 id="archivedModalName" style="font-size: 20px; font-weight: 800; color: #0f172a; margin: 0; line-height: 1.2;">Archived Tenant Name</h2>
+              <span id="archivedModalUsernameBadge" style="font-size: 12px; font-weight: 700; color: var(--clay-primary-dark); background: #e0e7ff; padding: 2px 8px; border-radius: 6px;">@RC001</span>
+              <span class="clay-badge" style="background: #fee2e2; color: #991b1b; font-size: 11px; font-weight: 800; padding: 3px 10px;">ARCHIVED</span>
+            </div>
+            <p id="archivedModalDeletedDate" style="font-size: 12.5px; color: var(--text-muted); margin: 4px 0 0 0;">Account deleted and archived on -</p>
           </div>
         </div>
-        <button type="button" class="btn-remove-file" onclick="closeTicketReplyModal()" style="font-size: 18px;">✕</button>
+        <button type="button" class="btn-remove-file" onclick="closeArchivedTenantModal()" title="Close (Esc)" style="cursor: pointer; font-size: 18px; padding: 4px 8px; border-radius: 8px; border: none; background: transparent; color: var(--text-muted);">✕</button>
       </div>
 
-      <input type="hidden" id="replyTicketId" value="">
+      <!-- Scrollable content sections -->
+      <div style="display: flex; flex-direction: column; gap: 18px;">
 
-      <!-- Metadata Badges -->
-      <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px;">
-        <span class="clay-badge" id="replyTicketUnitBadge" style="background: #e0e7ff; color: #4338ca; font-weight: 800;">Unit -</span>
-        <span class="clay-badge" id="replyTicketCatBadge">General</span>
-        <span class="clay-badge" id="replyTicketPrioBadge">Medium</span>
-        <span class="clay-badge" id="replyTicketStatusBadge">OPEN</span>
-      </div>
-
-      <!-- Tenant & Timestamps Summary -->
-      <div style="background: var(--clay-input-bg); border-radius: var(--radius-md); padding: 12px 16px; box-shadow: var(--clay-sunken-shadow); margin-bottom: 14px;">
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 12.5px;">
-          <div><span style="color: var(--text-muted);">Tenant:</span> <strong id="replyTicketTenant" style="color: #0f172a;">-</strong></div>
-          <div><span style="color: var(--text-muted);">Unit:</span> <strong id="replyTicketUnit" style="color: #4338ca;">-</strong></div>
-          <div><span style="color: var(--text-muted);">Email:</span> <span id="replyTicketEmail" style="color: #334155; font-weight: 600;">-</span></div>
-          <div><span style="color: var(--text-muted);">Phone:</span> <span id="replyTicketPhone" style="color: #334155; font-weight: 600;">-</span></div>
-          <div><span style="color: var(--text-muted);">Date Submitted:</span> <strong id="replyTicketDateSubmitted" style="color: #0f172a;">-</strong></div>
-          <div><span style="color: var(--text-muted);">Date Resolved:</span> <span id="replyTicketDateResolved" style="color: #047857; font-weight: 600;">-</span></div>
-        </div>
-      </div>
-
-      <!-- Problem Description -->
-      <div style="background: var(--clay-input-bg); border-radius: var(--radius-md); padding: 14px 16px; margin-bottom: 14px; box-shadow: var(--clay-sunken-shadow);">
-        <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 5px;">Full Description of the Problem</div>
-        <p id="replyTicketDescription" style="font-size: 13.5px; color: #1e293b; line-height: 1.5; white-space: pre-wrap; margin: 0;"></p>
-      </div>
-
-      <!-- Uploaded Images / Attachments -->
-      <div id="replyTicketPhotosSection" style="margin-bottom: 16px; display: none;">
-        <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 6px;">Uploaded Photos / Attachments</div>
-        <div id="replyTicketPhotosContainer" style="display: flex; gap: 10px; flex-wrap: wrap;"></div>
-      </div>
-
-      <form id="ticketReplyForm" onsubmit="event.preventDefault(); submitTicketReply();">
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 16px;">
-          <div class="form-group" style="margin-bottom: 0;">
-            <label class="form-label" for="replyTicketStatus">Update Status *</label>
-            <select id="replyTicketStatus" class="clay-select" style="width: 100%;">
-              <option value="open">Open</option>
-              <option value="in_progress">In Progress</option>
-              <option value="resolved">Resolved</option>
-              <option value="closed">Closed</option>
-            </select>
+        <!-- 1. PERSONAL INFORMATION & RENTAL INFORMATION (2 Columns) -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+          
+          <!-- Card A: Personal Information -->
+          <div style="background: var(--clay-input-bg, #f8fafc); border-radius: var(--radius-md, 12px); padding: 16px; box-shadow: var(--clay-sunken-shadow);">
+            <div style="font-size: 12.5px; font-weight: 800; color: #0f172a; margin-bottom: 12px; display: flex; align-items: center; gap: 6px;">
+              <span>👤</span> Personal Information
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 8px; font-size: 13px;">
+              <div><span style="color: var(--text-muted);">Full Name:</span> <strong id="archivedPersonalName" style="color: #0f172a;">-</strong></div>
+              <div><span style="color: var(--text-muted);">Email Address:</span> <span id="archivedPersonalEmail" style="color: #334155; font-weight: 600;">-</span></div>
+              <div><span style="color: var(--text-muted);">Contact Number:</span> <span id="archivedPersonalPhone" style="color: #334155; font-weight: 600;">-</span></div>
+              <div><span style="color: var(--text-muted);">Complete Address:</span> <span id="archivedPersonalAddress" style="color: #334155; font-weight: 600;">-</span></div>
+              <div><span style="color: var(--text-muted);">Date of Birth:</span> <strong id="archivedPersonalBirthday" style="color: #0f172a;">-</strong></div>
+            </div>
           </div>
-          <div class="form-group" style="margin-bottom: 0;">
-            <label class="form-label" for="replyTicketCost">Actual Repair Cost (₱)</label>
-            <input type="number" id="replyTicketCost" class="clay-input" step="0.01" min="0" placeholder="0.00">
+
+          <!-- Card B: Rental Information -->
+          <div style="background: var(--clay-input-bg, #f8fafc); border-radius: var(--radius-md, 12px); padding: 16px; box-shadow: var(--clay-sunken-shadow);">
+            <div style="font-size: 12.5px; font-weight: 800; color: #0f172a; margin-bottom: 12px; display: flex; align-items: center; gap: 6px;">
+              <span>🏠</span> Rental Information
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 8px; font-size: 13px;">
+              <div><span style="color: var(--text-muted);">Assigned Unit:</span> <span class="clay-badge" id="archivedRentalUnit" style="background: #e0e7ff; color: #4338ca; font-weight: 800; font-size: 11.5px; padding: 2px 8px;">-</span></div>
+              <div><span style="color: var(--text-muted);">Date of Moving In:</span> <strong id="archivedRentalMoveIn" style="color: #0f172a;">-</strong></div>
+              <div><span style="color: var(--text-muted);">Monthly Rent:</span> <strong id="archivedRentalMonthlyRent" style="color: #0f172a;">₱3,000.00 / mo</strong></div>
+              <div><span style="color: var(--text-muted);">Advance Deposit:</span> <strong id="archivedRentalDeposit" style="color: #047857;">₱3,000.00</strong></div>
+              <div><span style="color: var(--text-muted);">Account Created:</span> <span id="archivedRentalCreatedAt" style="color: #334155; font-weight: 600;">-</span></div>
+              <div><span style="color: var(--text-muted);">Date Archived:</span> <span id="archivedRentalDeletedAt" style="color: #be123c; font-weight: 700;">-</span></div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- 2. ACCOUNT INFORMATION -->
+        <div style="background: var(--clay-input-bg, #f8fafc); border-radius: var(--radius-md, 12px); padding: 14px 16px; box-shadow: var(--clay-sunken-shadow); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+          <div>
+            <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Username</div>
+            <strong id="archivedAccountUsername" style="font-size: 14px; color: #0f172a;">@RC001</strong>
+          </div>
+          <div>
+            <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Account Status</div>
+            <span class="clay-badge" style="background: #fee2e2; color: #991b1b; font-weight: 800; font-size: 11.5px; padding: 3px 10px;">Archived (Moved Out)</span>
+          </div>
+          <div>
+            <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">ID Verification</div>
+            <span id="archivedAccountIdStatus" style="font-size: 12.5px; font-weight: 600; color: #059669;">Verified Government ID</span>
           </div>
         </div>
 
-        <div class="form-group" style="margin-bottom: 20px;">
-          <label class="form-label" for="replyTicketMessage">Owner's Response / Instructions / Remarks *</label>
-          <textarea id="replyTicketMessage" class="clay-textarea" rows="4" placeholder="Enter instructions or status update for the tenant (e.g. Technician dispatched for inspection tomorrow morning)..." required></textarea>
+        <!-- 3. PAYMENT RECORDS (Historical Payments) -->
+        <div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <div style="font-size: 13px; font-weight: 800; color: #0f172a; display: flex; align-items: center; gap: 6px;">
+              <span>💳</span> Previous Payment History &amp; Billing Records
+            </div>
+            <span id="archivedPaymentCountBadge" class="clay-badge" style="font-size: 11px; background: #f1f5f9; color: #475569; font-weight: 700;">
+              0 Records
+            </span>
+          </div>
+
+          <div style="background: var(--clay-input-bg, #f8fafc); border-radius: var(--radius-md, 12px); overflow: hidden; box-shadow: var(--clay-sunken-shadow); border: 1px solid rgba(166, 180, 204, 0.2);">
+            <div style="overflow-x: auto; max-height: 240px; overflow-y: auto;">
+              <table style="width: 100%; border-collapse: collapse; font-size: 12.5px; text-align: left;">
+                <thead style="position: sticky; top: 0; z-index: 10;">
+                  <tr style="border-bottom: 1.5px solid rgba(166, 180, 204, 0.3); background: #f1f5f9; color: var(--text-muted); font-weight: 700;">
+                    <th style="padding: 10px 14px;">Billing Month</th>
+                    <th style="padding: 10px 14px;">Amount Due</th>
+                    <th style="padding: 10px 14px;">Amount Paid</th>
+                    <th style="padding: 10px 14px;">Payment Date</th>
+                    <th style="padding: 10px 14px;">Payment Method</th>
+                    <th style="padding: 10px 14px;">Status</th>
+                    <th style="padding: 10px 14px; text-align: center;">Receipt / Proof</th>
+                  </tr>
+                </thead>
+                <tbody id="archivedPaymentsList">
+                  <tr>
+                    <td colspan="7" style="text-align: center; padding: 24px 14px; color: var(--text-muted);">
+                      Loading payment records...
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
 
-        <div style="display: flex; gap: 12px;">
-          <button type="button" class="clay-btn btn-secondary" style="flex: 1; padding: 12px;" onclick="closeTicketReplyModal()">
-            Cancel
-          </button>
-          <button type="submit" id="btnSubmitTicketReply" class="clay-btn clay-btn-primary" style="flex: 1; padding: 12px;">
-            <span>Save &amp; Update Ticket</span>
-          </button>
+        <!-- 4. MODAL FOOTER & ARCHIVED TENANT FUNCTIONS -->
+        <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid rgba(166, 180, 204, 0.25); padding-top: 16px; margin-top: 6px; flex-wrap: wrap; gap: 12px;">
+          <div>
+            <button type="button" id="btnPermanentDeleteArchived" class="btn-moveout-delete" style="padding: 9px 16px; font-size: 12.5px; margin: 0;" onclick="submitPermanentDeleteArchived()">
+              🗑️ Permanently Delete Account
+            </button>
+          </div>
+          <div style="display: flex; gap: 10px; align-items: center;">
+            <button type="button" class="clay-btn clay-btn-secondary" onclick="closeArchivedTenantModal()" style="padding: 10px 18px; font-size: 13px;">
+              Close
+            </button>
+            <button type="button" id="btnRestoreArchivedAccount" class="clay-btn clay-btn-primary" style="padding: 10px 22px; font-size: 13px; font-weight: 800; background: linear-gradient(135deg, #059669, #047857); border-color: #047857;" onclick="submitRestoreArchivedAccount()">
+              <span>♻️ Restore Account</span>
+            </button>
+          </div>
         </div>
-      </form>
+
+      </div>
     </div>
   </div>
-
-  <!-- =====================================================================
-       MODAL: RENT DUE ANNOUNCEMENT (OWNER TO TENANTS)
-       ===================================================================== -->
   <div class="modal-backdrop" id="announcementModal">
     <div class="clay-modal" style="max-width: 560px;">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
@@ -1981,6 +2447,13 @@ $pendingReviewCount = count($pendingReviewPayments);
     //    The sidebar strictly remains open and only collapses or hides when the main toggle button (☰) is explicitly clicked.
     function switchSection(sectionId, btn, updateUrl = true) {
       if (!sectionId) return;
+
+      if (sectionId === 'sectionArchivedTenants') {
+        const dirBtn = document.getElementById('navTenantDirectory');
+        switchSection('sectionDirectory', dirBtn, updateUrl);
+        switchDirectoryTab('archived');
+        return;
+      }
 
       if (sectionId === 'sectionProfile') {
         openProfileView('accountInfo', updateUrl);
@@ -2633,10 +3106,34 @@ $pendingReviewCount = count($pendingReviewPayments);
         }
       }
 
-      // Bind Delete Account button
+      // Rental / Move-out status display
+      const isMovedOut = (t.rental_status === 'moved_out');
+      const statusBadge = document.getElementById('tdRentalStatusBadge');
+      const noticeBox = document.getElementById('tdMovedOutNotice');
       const delBtn = document.getElementById('tdBtnDelete');
+
+      if (statusBadge) {
+        if (isMovedOut) {
+          statusBadge.className = 'clay-badge';
+          statusBadge.style.background = '#fef3c7';
+          statusBadge.style.color = '#92400e';
+          statusBadge.textContent = 'Moved Out (Pending Settlement)';
+        } else {
+          statusBadge.className = 'clay-badge badge-paid';
+          statusBadge.style.background = '';
+          statusBadge.style.color = '';
+          statusBadge.textContent = 'Active Resident';
+        }
+      }
+
+      if (noticeBox) {
+        noticeBox.style.display = isMovedOut ? 'block' : 'none';
+      }
+
+      // Bind Move-Out / Settlement button
       if (delBtn) {
-        delBtn.onclick = () => deleteTenantAccount(t.id, t.name, unitNumber, unitId || t.unit_id);
+        delBtn.innerHTML = isMovedOut ? '⚡ Verify Settlement &amp; Archive' : '🚪 Mark as Moved Out';
+        delBtn.onclick = () => deleteTenantAccount(t.id, t.name, unitNumber, unitId || t.unit_id, isMovedOut);
       }
 
       document.getElementById('tenantDetailsModal').classList.add('open');
@@ -2709,27 +3206,30 @@ $pendingReviewCount = count($pendingReviewPayments);
     // =========================================================================
     let isDeletingTenant = false;
 
-    async function deleteTenantAccount(tenantId, tenantName, unitNumber, unitId = null) {
+    async function deleteTenantAccount(tenantId, tenantName, unitNumber, unitId = null, alreadyMovedOut = false) {
       if (isDeletingTenant) return;
 
-      // 1. Exact confirmation dialog required by prompt
-      const confirmed = confirm("Are you sure you want to delete this tenant account? This action may affect associated records.");
+      const promptMsg = alreadyMovedOut 
+        ? `Verify settlement and archive account for '${tenantName}'? If all bills are paid and verified, this tenant will be archived.`
+        : `Are you sure you want to mark '${tenantName}' as Moved Out? If all bills and charges are fully settled, the account will be automatically archived.`;
+
+      const confirmed = confirm(promptMsg);
       if (!confirmed) {
         return;
       }
 
       isDeletingTenant = true;
       const delBtn = document.getElementById('tdBtnDelete');
-      const origBtnContent = delBtn ? delBtn.innerHTML : 'Delete Account';
+      const origBtnContent = delBtn ? delBtn.innerHTML : 'Processing...';
 
-      // 2. Display loading state & disable Delete button
+      // Display loading state & disable button
       if (delBtn) {
         delBtn.disabled = true;
         delBtn.style.opacity = '0.75';
         delBtn.style.cursor = 'not-allowed';
         delBtn.innerHTML = `
           <span class="clay-spinner" style="width: 15px; height: 15px; border-width: 2px; vertical-align: middle; margin-right: 6px;"></span>
-          <span>Deleting account, please wait...</span>
+          <span>Processing move-out &amp; settlement...</span>
         `;
       }
 
@@ -2737,17 +3237,17 @@ $pendingReviewCount = count($pendingReviewPayments);
         const res = await fetch('api/tenant_directory_api.php', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'delete', tenant_id: parseInt(tenantId, 10) })
+          body: JSON.stringify({ action: 'mark_moved_out', tenant_id: parseInt(tenantId, 10) })
         });
         const result = await res.json();
 
-        if (res.ok && result.status === 'success') {
-          showToast(result.message || 'Tenant account deleted successfully.');
+        if (res.ok && result.status === 'success' && result.archived) {
+          showToast(result.message || 'Tenant account officially archived successfully.');
           closeTenantDetailsModal();
 
           const resolvedUnitId = unitId || result.unit_id;
 
-          // 5. Smoothly remove summary row from the DOM while remaining in unit folder
+          // Smoothly remove summary row from the DOM while remaining in unit folder
           const row = document.getElementById(`tenant-row-${tenantId}`);
           if (row) {
             row.style.transition = 'all 0.3s ease';
@@ -2763,11 +3263,17 @@ $pendingReviewCount = count($pendingReviewPayments);
               window.location.href = `admin_dashboard.php?section=sectionDirectory&unit_id=${resolvedUnitId}`;
             }, 800);
           }
+        } else if (result.status === 'pending_settlement') {
+          showToast(result.message, 'warning');
+          closeTenantDetailsModal();
+          setTimeout(() => {
+            window.location.reload();
+          }, 1200);
         } else {
-          showToast(result.message || 'Error deleting tenant account.', 'error');
+          showToast(result.message || 'Error processing move-out.', 'error');
         }
       } catch (e) {
-        showToast('Network error while deleting tenant account. Please try again.', 'error');
+        showToast('Network error while processing move-out. Please try again.', 'error');
       } finally {
         isDeletingTenant = false;
         if (delBtn) {
@@ -2801,7 +3307,11 @@ $pendingReviewCount = count($pendingReviewPayments);
       // Initialize Settings button visibility based on whether Profile section is active
       updateProfileSettingsVisibility(targetSection === 'sectionProfile');
 
-      if (targetSection === 'sectionDirectory') {
+      if (targetSection === 'sectionArchivedTenants') {
+        const navBtn = document.getElementById('navTenantDirectory');
+        if (navBtn) switchSection('sectionDirectory', navBtn, false);
+        switchDirectoryTab('archived');
+      } else if (targetSection === 'sectionDirectory') {
         const navBtn = document.getElementById('navTenantDirectory');
         if (navBtn) switchSection('sectionDirectory', navBtn, false);
         if (targetUnitId) {
@@ -2810,6 +3320,10 @@ $pendingReviewCount = count($pendingReviewPayments);
       } else if (targetSection === 'sectionTickets') {
         const navBtn = document.getElementById('navMaintenanceTickets');
         if (navBtn) switchSection('sectionTickets', navBtn, false);
+        const targetTicketId = urlParams.get('ticket_id');
+        if (targetTicketId) {
+          window.openTicketDetailsById(targetTicketId);
+        }
       } else if (targetSection === 'sectionPayments') {
         const navBtn = document.getElementById('navPaymentVerification');
         if (navBtn) switchSection('sectionPayments', navBtn, false);
@@ -2821,137 +3335,663 @@ $pendingReviewCount = count($pendingReviewPayments);
       }
     });
 
-    // Update Ticket
-    async function updateTicket(id, status, cost) {
+    // =========================================================================
+    // UTILITY: SAFE HTML ESCAPER
+    // =========================================================================
+    function escapeHtml(str) {
+      if (str === null || str === undefined) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    // =========================================================================
+    // TENANT DIRECTORY TABS: ACTIVE TENANTS VS ARCHIVED TENANTS
+    // =========================================================================
+    function switchDirectoryTab(tab) {
+      const activeBtn = document.getElementById('btnTabActiveDirectory');
+      const archivedBtn = document.getElementById('btnTabArchivedDirectory');
+      const activeView = document.getElementById('directoryActiveView');
+      const archivedView = document.getElementById('directoryArchivedView');
+
+      if (tab === 'archived') {
+        if (activeBtn) activeBtn.classList.remove('active');
+        if (archivedBtn) archivedBtn.classList.add('active');
+        if (activeView) activeView.style.display = 'none';
+        if (archivedView) archivedView.style.display = 'block';
+        loadArchivedTenants();
+      } else {
+        if (archivedBtn) archivedBtn.classList.remove('active');
+        if (activeBtn) activeBtn.classList.add('active');
+        if (archivedView) archivedView.style.display = 'none';
+        if (activeView) activeView.style.display = 'block';
+      }
+    }
+
+    let cachedArchivedTenants = [];
+    let isArchivedTenantsLoading = false;
+
+    async function loadArchivedTenants(searchQuery = '') {
+      if (isArchivedTenantsLoading) return;
+      isArchivedTenantsLoading = true;
+
+      const tbody = document.getElementById('archivedTenantsTableBody');
+      const countBadge = document.getElementById('archivedTenantCountBadge');
+      const dirBadge = document.getElementById('directoryArchivedCountBadge');
+
+      if (tbody && !searchQuery) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="7" style="text-align: center; padding: 36px 14px; color: var(--text-muted); font-size: 13.5px;">
+              <span class="clay-spinner" style="width: 18px; height: 18px; border-width: 2px; vertical-align: middle; margin-right: 8px;"></span>
+              Loading archived tenant accounts...
+            </td>
+          </tr>
+        `;
+      }
+
+      try {
+        const url = 'api/tenant_directory_api.php?action=list_archived&search=' + encodeURIComponent(searchQuery);
+        const res = await fetch(url);
+        const data = await res.json();
+
+        if (res.ok && data.status === 'success') {
+          cachedArchivedTenants = data.archived_tenants || [];
+          const count = cachedArchivedTenants.length;
+
+          if (countBadge) countBadge.textContent = `${count} Archived Record${count === 1 ? '' : 's'}`;
+          if (dirBadge) dirBadge.textContent = count;
+
+          renderArchivedTenantsTable(cachedArchivedTenants);
+        } else {
+          if (tbody) {
+            tbody.innerHTML = `
+              <tr>
+                <td colspan="7" style="text-align: center; padding: 32px 14px; color: #ef4444; font-size: 13.5px;">
+                  Failed to load archived records: ${escapeHtml(data.message || 'Server error')}
+                </td>
+              </tr>
+            `;
+          }
+        }
+      } catch (err) {
+        console.error('Error loading archived tenants:', err);
+        if (tbody) {
+          tbody.innerHTML = `
+            <tr>
+              <td colspan="7" style="text-align: center; padding: 32px 14px; color: #ef4444; font-size: 13.5px;">
+                Network error while loading archived records. Please refresh.
+              </td>
+            </tr>
+          `;
+        }
+      } finally {
+        isArchivedTenantsLoading = false;
+      }
+    }
+
+    let searchArchivedTimeout = null;
+    function filterArchivedTenants(val) {
+      if (searchArchivedTimeout) clearTimeout(searchArchivedTimeout);
+      searchArchivedTimeout = setTimeout(() => {
+        loadArchivedTenants(val.trim());
+      }, 300);
+    }
+
+    function renderArchivedTenantsTable(tenants) {
+      const tbody = document.getElementById('archivedTenantsTableBody');
+      if (!tbody) return;
+
+      if (!tenants || tenants.length === 0) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="6" style="text-align: center; padding: 42px 14px; color: var(--text-muted); font-size: 13.5px;">
+              <div style="font-size: 28px; margin-bottom: 8px;">📁</div>
+              <strong>No archived tenant accounts found.</strong>
+              <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Deleted and moved-out tenant records will appear here with full historical logs.</div>
+            </td>
+          </tr>
+        `;
+        return;
+      }
+
+      let html = '';
+      tenants.forEach(t => {
+        const initial = (t.name ? t.name.charAt(0) : 'T').toUpperCase();
+        const avatarHtml = t.profile_picture 
+          ? `<img src="${escapeHtml(t.profile_picture)}" alt="${escapeHtml(t.name)}" style="width: 34px; height: 34px; border-radius: 50%; object-fit: cover; border: 1.5px solid #cbd5e1; flex-shrink: 0;">`
+          : `<div style="width: 34px; height: 34px; border-radius: 50%; background: linear-gradient(135deg, #64748b, #475569); color: #fff; font-weight: 700; font-size: 13px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">${initial}</div>`;
+
+        html += `
+          <tr id="archived-row-${t.id}"
+              class="clickable-ticket-row archived-tenant-row"
+              onclick="openArchivedTenantDetails(${t.id})"
+              title="Click to view full archived tenant details"
+              style="border-bottom: 1px solid rgba(166, 180, 204, 0.15);">
+            <td style="padding: 14px 16px; font-weight: 700; color: #0f172a; white-space: nowrap;">
+              <div style="display: flex; align-items: center; gap: 10px;">
+                ${avatarHtml}
+                <span>${escapeHtml(t.name)}</span>
+              </div>
+            </td>
+            <td style="padding: 14px 16px; white-space: nowrap;">
+              <span class="clay-badge" style="background: #e0e7ff; color: #4338ca; font-weight: 800; font-size: 11.5px; padding: 3px 9px;">
+                ${escapeHtml(t.archived_unit_number || 'Unit N/A')}
+              </span>
+            </td>
+            <td style="padding: 14px 16px; color: #334155; font-size: 13px;">${escapeHtml(t.email || '—')}</td>
+            <td style="padding: 14px 16px; color: #334155; font-size: 13px; white-space: nowrap;">${escapeHtml(t.phone || '—')}</td>
+            <td style="padding: 14px 16px; color: var(--text-muted); font-size: 12.5px; white-space: nowrap;">${escapeHtml(t.formatted_move_in || '—')}</td>
+            <td style="padding: 14px 16px; color: #be123c; font-weight: 700; font-size: 12.5px; white-space: nowrap;">
+              ${escapeHtml(t.formatted_deleted_at || 'Archived')}
+            </td>
+          </tr>
+        `;
+      });
+
+      tbody.innerHTML = html;
+    }
+
+    async function openArchivedTenantDetails(tenantId) {
+      const modal = document.getElementById('archivedTenantDetailsModal');
+      if (!modal) return;
+
+      const tenantIdInput = document.getElementById('archivedModalTenantId');
+      if (tenantIdInput) tenantIdInput.value = tenantId;
+
+      // Animate modal open & lock body scroll
+      modal.classList.add('open', 'active');
+      document.body.style.overflow = 'hidden';
+
+      // Reset loading state for payments list
+      const payList = document.getElementById('archivedPaymentsList');
+      if (payList) {
+        payList.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 24px 14px; color: var(--text-muted);"><span class="clay-spinner" style="width: 16px; height: 16px; border-width: 2px; vertical-align: middle; margin-right: 6px;"></span>Loading payment records...</td></tr>';
+      }
+
+      try {
+        const res = await fetch(`api/tenant_directory_api.php?action=get_archived_tenant_details&tenant_id=${tenantId}`);
+        const data = await res.json();
+
+        if (res.ok && data.status === 'success') {
+          const t = data.tenant;
+          const payments = data.payments || [];
+
+          // Header
+          const nameEl = document.getElementById('archivedModalName');
+          const dateEl = document.getElementById('archivedModalDeletedDate');
+          const avatarEl = document.getElementById('archivedModalAvatar');
+          const usernameBadge = document.getElementById('archivedModalUsernameBadge');
+
+          if (nameEl) nameEl.textContent = t.name || 'Archived Tenant';
+          if (dateEl) dateEl.textContent = `Account deleted and archived on ${t.formatted_deleted_at || 'N/A'}`;
+          if (usernameBadge) usernameBadge.textContent = t.username ? `@${t.username}` : '@RC000';
+          if (avatarEl) {
+            if (t.profile_picture) {
+              avatarEl.innerHTML = `<img src="${escapeHtml(t.profile_picture)}" alt="${escapeHtml(t.name)}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 14px;">`;
+            } else {
+              avatarEl.textContent = (t.name ? t.name.charAt(0) : 'T').toUpperCase();
+            }
+          }
+
+          // Personal Information
+          const pName = document.getElementById('archivedPersonalName');
+          const pEmail = document.getElementById('archivedPersonalEmail');
+          const pPhone = document.getElementById('archivedPersonalPhone');
+          const pAddress = document.getElementById('archivedPersonalAddress');
+          const pBirthday = document.getElementById('archivedPersonalBirthday');
+
+          if (pName) pName.textContent = t.name || '-';
+          if (pEmail) pEmail.textContent = t.email || '—';
+          if (pPhone) pPhone.textContent = t.phone || '—';
+          if (pAddress) pAddress.textContent = t.complete_address || '—';
+          if (pBirthday) pBirthday.textContent = t.formatted_birthday || 'Not provided';
+
+          // Rental Information
+          const rUnit = document.getElementById('archivedRentalUnit');
+          const rMoveIn = document.getElementById('archivedRentalMoveIn');
+          const rRent = document.getElementById('archivedRentalMonthlyRent');
+          const rDeposit = document.getElementById('archivedRentalDeposit');
+          const rCreatedAt = document.getElementById('archivedRentalCreatedAt');
+          const rDeletedAt = document.getElementById('archivedRentalDeletedAt');
+
+          if (rUnit) rUnit.textContent = t.archived_unit_number || 'Unit N/A';
+          if (rMoveIn) rMoveIn.textContent = t.formatted_move_in || '—';
+          if (rRent) rRent.textContent = t.archived_monthly_rent_formatted || '₱3,000.00 / mo';
+          if (rDeposit) rDeposit.textContent = t.advance_deposit_formatted || '₱3,000.00';
+          if (rCreatedAt) rCreatedAt.textContent = t.formatted_created_at || '—';
+          if (rDeletedAt) rDeletedAt.textContent = t.formatted_deleted_at || 'Archived';
+
+          // Account Information
+          const aUser = document.getElementById('archivedAccountUsername');
+          const aIdStatus = document.getElementById('archivedAccountIdStatus');
+
+          if (aUser) aUser.textContent = t.username ? `@${t.username}` : '@RC000';
+          if (aIdStatus) {
+            aIdStatus.textContent = t.id_type ? `${t.id_type} – Verified ID` : 'Verified Account';
+          }
+
+          // Payment Records
+          const pBadge = document.getElementById('archivedPaymentCountBadge');
+          if (pBadge) pBadge.textContent = `${payments.length} Record${payments.length === 1 ? '' : 's'}`;
+
+          if (payList) {
+            if (payments.length === 0) {
+              payList.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 24px 14px; color: var(--text-muted);">No payment records found for this archived account.</td></tr>';
+            } else {
+              payList.innerHTML = payments.map(p => {
+                const receiptLink = p.receipt_filename 
+                  ? `<a href="uploads/receipts/${escapeHtml(p.receipt_filename)}" target="_blank" class="btn-inspect-proof" style="font-size: 11px; padding: 3px 8px; text-decoration: none;">🔍 View Receipt</a>`
+                  : '<span style="color: #94a3b8; font-size: 11px;">None</span>';
+                const methodStr = p.payment_method || 'GCash / Bank Transfer';
+                return `
+                  <tr style="border-bottom: 1px solid rgba(166, 180, 204, 0.15);">
+                    <td style="padding: 10px 14px; font-weight: 700; color: #0f172a;">${escapeHtml(p.billing_cycle_formatted || '-')}</td>
+                    <td style="padding: 10px 14px; font-weight: 600; color: #475569;">${escapeHtml(p.amount_due_formatted || '₱0.00')}</td>
+                    <td style="padding: 10px 14px; font-weight: 700; color: #047857;">${escapeHtml(p.amount_paid_formatted || '₱0.00')}</td>
+                    <td style="padding: 10px 14px; font-size: 12px; color: var(--text-muted);">${escapeHtml(p.payment_date_formatted || 'Pending')}</td>
+                    <td style="padding: 10px 14px; font-size: 12px; color: #334155; font-weight: 600;">${escapeHtml(methodStr)}</td>
+                    <td style="padding: 10px 14px;"><span class="clay-badge badge-${escapeHtml(p.status)}">${escapeHtml(String(p.status).toUpperCase())}</span></td>
+                    <td style="padding: 10px 14px; text-align: center;">${receiptLink}</td>
+                  </tr>
+                `;
+              }).join('');
+            }
+          }
+
+        } else {
+          showToast(data.message || 'Error fetching archived details', 'error');
+        }
+      } catch (err) {
+        showToast('Error communicating with server', 'error');
+      }
+    }
+
+    function closeArchivedTenantModal() {
+      const modal = document.getElementById('archivedTenantDetailsModal');
+      if (modal) {
+        modal.classList.remove('open', 'active');
+        document.body.style.overflow = '';
+      }
+    }
+
+    function handleArchivedModalBackdropClick(event) {
+      if (event.target === document.getElementById('archivedTenantDetailsModal')) {
+        closeArchivedTenantModal();
+      }
+    }
+
+    async function submitRestoreArchivedAccount() {
+      const tenantId = document.getElementById('archivedModalTenantId').value;
+      if (!tenantId) return;
+
+      const tenantName = document.getElementById('archivedPersonalName').textContent || 'this tenant';
+      if (!confirm(`Are you sure you want to restore '${tenantName}' to the Active Tenants list?`)) {
+        return;
+      }
+
+      const btn = document.getElementById('btnRestoreArchivedAccount');
+      const origHtml = btn.innerHTML;
+      btn.innerHTML = '<span>Restoring...</span>';
+      btn.disabled = true;
+
+      try {
+        const res = await fetch('api/tenant_directory_api.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'restore', tenant_id: parseInt(tenantId, 10) })
+        });
+        const data = await res.json();
+        if (res.ok && data.status === 'success') {
+          showToast(data.message || `Tenant '${tenantName}' restored successfully.`);
+          closeArchivedTenantModal();
+          loadArchivedTenants();
+          if (typeof loadTenantsDirectory === 'function') {
+            loadTenantsDirectory();
+          }
+        } else {
+          showToast(data.message || 'Failed to restore tenant account.', 'error');
+        }
+      } catch (err) {
+        showToast('Error communicating with server while restoring account.', 'error');
+      } finally {
+        btn.innerHTML = origHtml;
+        btn.disabled = false;
+      }
+    }
+
+    async function submitPermanentDeleteArchived() {
+      const tenantId = document.getElementById('archivedModalTenantId').value;
+      if (!tenantId) return;
+
+      const tenantName = document.getElementById('archivedPersonalName').textContent || 'this tenant';
+      const confirmFirst = confirm(`⚠️ PERMANENT DELETION WARNING:\n\nAre you sure you want to permanently delete the archived account of '${tenantName}'?\n\nThis action cannot be undone.`);
+      if (!confirmFirst) return;
+
+      const confirmSecond = confirm(`Please confirm a second time: Permanently delete '${tenantName}'? All associated account records will be removed.`);
+      if (!confirmSecond) return;
+
+      const btn = document.getElementById('btnPermanentDeleteArchived');
+      const origHtml = btn.innerHTML;
+      btn.innerHTML = 'Deleting...';
+      btn.disabled = true;
+
+      try {
+        const res = await fetch('api/tenant_directory_api.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'permanent_delete', tenant_id: parseInt(tenantId, 10) })
+        });
+        const data = await res.json();
+        if (res.ok && data.status === 'success') {
+          showToast(data.message || `Tenant account '${tenantName}' permanently deleted.`);
+          closeArchivedTenantModal();
+          loadArchivedTenants();
+        } else {
+          showToast(data.message || 'Failed to permanently delete tenant account.', 'error');
+        }
+      } catch (err) {
+        showToast('Error communicating with server while deleting account.', 'error');
+      } finally {
+        btn.innerHTML = origHtml;
+        btn.disabled = false;
+      }
+    }
+
+    // =========================================================================
+    // MAINTENANCE TICKETS: SEPARATE ACTIVE & COMPLETED TABS & STATUS WORKFLOW
+    // =========================================================================
+    function switchTicketTab(tab) {
+      const activeBtn = document.getElementById('btnTabActiveTickets');
+      const completedBtn = document.getElementById('btnTabCompletedTickets');
+      const activePane = document.getElementById('paneActiveTickets');
+      const completedPane = document.getElementById('paneCompletedTickets');
+
+      if (tab === 'completed') {
+        if (activeBtn) activeBtn.classList.remove('active');
+        if (completedBtn) completedBtn.classList.add('active');
+        if (activePane) activePane.style.display = 'none';
+        if (completedPane) completedPane.style.display = 'block';
+      } else {
+        if (completedBtn) completedBtn.classList.remove('active');
+        if (activeBtn) activeBtn.classList.add('active');
+        if (completedPane) completedPane.style.display = 'none';
+        if (activePane) activePane.style.display = 'block';
+      }
+    }
+
+    // Direct Status Update (From table row dropdown or modal)
+    async function updateTicketStatus(id, newStatus) {
+      const normStatus = (newStatus === 'Done' || newStatus === 'resolved' || newStatus === 'closed') 
+        ? 'Done' 
+        : ((newStatus === 'On-Going' || newStatus === 'in_progress') ? 'On-Going' : 'Pending');
+
       try {
         const res = await fetch('api/ticket_api.php', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'update_ticket', ticket_id: id, status: status, actual_cost: parseFloat(cost) || 0 })
+          body: JSON.stringify({ action: 'update_status', ticket_id: parseInt(id, 10), status: normStatus })
         });
         const result = await res.json();
         if (result.status === 'success') {
-          showToast(result.message);
-          if (window.history && window.history.replaceState) {
-            history.replaceState(null, '', 'admin_dashboard.php?section=sectionTickets');
-          }
+          showToast(`Ticket #MT-${String(id).padStart(4, '0')} updated to ${normStatus}.`);
+          moveTicketRowInDOM(id, normStatus);
+        } else {
+          showToast(result.message || 'Failed to update ticket status', 'error');
         }
       } catch (e) {
-        showToast('Error updating ticket', 'error');
+        showToast('Error updating ticket status', 'error');
       }
     }
 
-    // Maintenance Ticket Detailed Inspection & Reply Modal
+    // Helper to dynamically move ticket rows between Active and Completed Maintenance tables
+    function moveTicketRowInDOM(ticketId, status) {
+      const row = document.getElementById('ticket-row-' + ticketId);
+      if (!row) return;
+
+      const activeTbody = document.getElementById('activeTicketsTableBody');
+      const completedTbody = document.getElementById('completedTicketsTableBody');
+      const activeCountBadge = document.getElementById('activeTicketCountBadge');
+      const completedCountBadge = document.getElementById('completedTicketCountBadge');
+
+      // 1. Update the status badge inside the row (Column 7)
+      const badgeEl = document.getElementById('ticket-badge-' + ticketId);
+      if (badgeEl) {
+        badgeEl.textContent = status;
+        const normClass = (status === 'Done') ? 'badge-done' : ((status === 'On-Going') ? 'badge-ongoing' : 'badge-pending');
+        badgeEl.className = 'clay-badge ' + normClass;
+      }
+
+      // 2. Update ticket data in onclick if present
+      const currentOnClick = row.getAttribute('onclick') || '';
+      try {
+        const match = currentOnClick.match(/(?:openTicketDetailsModal|openTicketDetailPage)\(([\s\S]*)\)$/);
+        if (match && match[1]) {
+          const tkData = JSON.parse(match[1]);
+          tkData.status = status;
+          if (status === 'Done') tkData.resolved_at = new Date().toISOString();
+          else tkData.resolved_at = null;
+          row.setAttribute('onclick', `openTicketDetailsModal(${JSON.stringify(tkData)})`);
+        }
+      } catch (err) {}
+
+      // 3. Move row between Active and Completed tables if needed
+      if (status === 'Done') {
+        // Move to Completed table if not already there
+        if (!completedTbody.contains(row)) {
+          const emptyCompleted = document.getElementById('emptyCompletedTicketsRow');
+          if (emptyCompleted) emptyCompleted.style.display = 'none';
+
+          completedTbody.prepend(row);
+
+          const currentActiveCount = activeTbody.querySelectorAll('.clickable-ticket-row').length;
+          const currentCompletedCount = completedTbody.querySelectorAll('.clickable-ticket-row').length;
+          if (activeCountBadge) activeCountBadge.textContent = currentActiveCount;
+          if (completedCountBadge) completedCountBadge.textContent = currentCompletedCount;
+
+          if (currentActiveCount === 0) {
+            const emptyActive = document.getElementById('emptyActiveTicketsRow');
+            if (emptyActive) emptyActive.style.display = '';
+            else {
+              activeTbody.innerHTML = `
+                <tr id="emptyActiveTicketsRow">
+                  <td colspan="7" style="text-align: center; padding: 42px 14px; color: var(--text-muted); font-size: 14px;">
+                    <div style="font-size: 32px; margin-bottom: 8px;">🎉</div>
+                    <strong>No active or pending maintenance requests.</strong>
+                    <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">All reported issues are currently resolved.</div>
+                  </td>
+                </tr>
+              `;
+            }
+          }
+        }
+      } else {
+        // Status is 'Pending' or 'On-Going', move to Active table if in Completed table
+        if (!activeTbody.contains(row)) {
+          const emptyActive = document.getElementById('emptyActiveTicketsRow');
+          if (emptyActive) emptyActive.style.display = 'none';
+
+          activeTbody.prepend(row);
+
+          const currentActiveCount = activeTbody.querySelectorAll('.clickable-ticket-row').length;
+          const currentCompletedCount = completedTbody.querySelectorAll('.clickable-ticket-row').length;
+          if (activeCountBadge) activeCountBadge.textContent = currentActiveCount;
+          if (completedCountBadge) completedCountBadge.textContent = currentCompletedCount;
+
+          if (currentCompletedCount === 0) {
+            const emptyCompleted = document.getElementById('emptyCompletedTicketsRow');
+            if (emptyCompleted) emptyCompleted.style.display = '';
+            else {
+              completedTbody.innerHTML = `
+                <tr id="emptyCompletedTicketsRow">
+                  <td colspan="7" style="text-align: center; padding: 42px 14px; color: var(--text-muted); font-size: 14px;">
+                    <div style="font-size: 32px; margin-bottom: 8px;">📋</div>
+                    <strong>No completed maintenance records yet.</strong>
+                    <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Resolved tickets will be archived here for historical review.</div>
+                  </td>
+                </tr>
+              `;
+            }
+          }
+        }
+      }
+    }
+
+    function updateTicket(id, status, cost) {
+      updateTicketStatus(id, status);
+    }
+
+    // =========================================================================
+    // ANIMATED MAINTENANCE TICKET DETAILS MODAL
+    // =========================================================================
     function openTicketDetailsModal(tk) {
       if (!tk) return;
-      document.getElementById('replyTicketId').value = tk.id;
-      document.getElementById('replyTicketIdLabel').textContent = '#MT-' + String(tk.id).padStart(4, '0');
-      document.getElementById('replyTicketTitle').textContent = tk.title || 'Maintenance Request';
+
+      // 1. Identifiers and Header
+      const idVal = tk.id;
+      const ticketIdInput = document.getElementById('mdlTicketId');
+      if (ticketIdInput) ticketIdInput.value = idVal;
       
-      const unitBadge = document.getElementById('replyTicketUnitBadge');
-      if (unitBadge) unitBadge.textContent = tk.unit_number || 'Unit';
+      const badgeNumber = document.getElementById('mdlTicketNumberBadge');
+      if (badgeNumber) badgeNumber.textContent = '#MT-' + String(idVal).padStart(4, '0');
 
-      const catBadge = document.getElementById('replyTicketCatBadge');
-      if (catBadge) {
-        catBadge.textContent = tk.category || 'General';
-        catBadge.className = 'clay-badge badge-' + String(tk.category || 'general').toLowerCase();
-      }
+      const titleEl = document.getElementById('mdlTicketTitle');
+      if (titleEl) titleEl.textContent = tk.title || 'Maintenance Request';
 
-      const prioBadge = document.getElementById('replyTicketPrioBadge');
-      if (prioBadge) {
-        prioBadge.textContent = String(tk.priority || 'medium').toUpperCase();
-        prioBadge.className = 'clay-badge badge-' + String(tk.priority || 'medium').toLowerCase();
-      }
-
-      const statusBadge = document.getElementById('replyTicketStatusBadge');
-      if (statusBadge) {
-        statusBadge.textContent = String(tk.status || 'open').toUpperCase();
-        statusBadge.className = 'clay-badge badge-' + String(tk.status || 'open').toLowerCase();
-      }
-
-      document.getElementById('replyTicketTenant').textContent = tk.tenant_name || '-';
-      document.getElementById('replyTicketUnit').textContent = tk.unit_number || '-';
-      document.getElementById('replyTicketEmail').textContent = tk.tenant_email || 'Not on file';
-      document.getElementById('replyTicketPhone').textContent = tk.tenant_phone || 'Not on file';
-
+      // 2. Submission Date
       let dateSub = '-';
       if (tk.created_at) {
         dateSub = new Date(tk.created_at.replace(' ', 'T')).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
       }
-      document.getElementById('replyTicketDateSubmitted').textContent = dateSub;
+      const dateSubEl = document.getElementById('mdlDateSubmitted');
+      if (dateSubEl) dateSubEl.textContent = dateSub;
 
-      let dateRes = 'In progress / Pending';
-      if (tk.resolved_at) {
-        dateRes = new Date(tk.resolved_at.replace(' ', 'T')).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      // 3. Category & Priority Badges
+      const catBadge = document.getElementById('mdlCategoryBadge');
+      if (catBadge) {
+        catBadge.textContent = 'Category: ' + (tk.category || 'General');
+        catBadge.className = 'clay-badge badge-' + String(tk.category || 'general').toLowerCase();
       }
-      document.getElementById('replyTicketDateResolved').textContent = dateRes;
 
-      document.getElementById('replyTicketDescription').textContent = tk.description || 'No additional description provided.';
-      document.getElementById('replyTicketStatus').value = tk.status || 'open';
-      document.getElementById('replyTicketCost').value = (tk.actual_cost && parseFloat(tk.actual_cost) > 0) ? parseFloat(tk.actual_cost).toFixed(2) : '';
-      document.getElementById('replyTicketMessage').value = tk.resolution_notes || '';
+      const prioBadge = document.getElementById('mdlPriorityBadge');
+      if (prioBadge) {
+        const p = String(tk.priority || 'medium').toLowerCase();
+        prioBadge.textContent = 'Priority: ' + p.charAt(0).toUpperCase() + p.slice(1);
+        prioBadge.className = 'clay-badge badge-' + p;
+      }
 
-      // Photos container
-      const photosSec = document.getElementById('replyTicketPhotosSection');
-      const photosContainer = document.getElementById('replyTicketPhotosContainer');
-      if (photosSec && photosContainer) {
+      // 4. Status Badge & Select
+      const normStatus = (tk.status === 'Done' || tk.status === 'resolved' || tk.status === 'closed')
+        ? 'Done'
+        : ((tk.status === 'On-Going' || tk.status === 'in_progress') ? 'On-Going' : 'Pending');
+
+      const statusBadge = document.getElementById('mdlStatusBadge');
+      if (statusBadge) {
+        statusBadge.textContent = 'Status: ' + normStatus;
+        statusBadge.className = 'clay-badge ' + (normStatus === 'Done' ? 'badge-done' : (normStatus === 'On-Going' ? 'badge-ongoing' : 'badge-pending'));
+      }
+
+      const selStatus = document.getElementById('mdlSelectStatus');
+      if (selStatus) {
+        selStatus.value = normStatus;
+      }
+
+      // 5. Tenant Info
+      const tenantNameEl = document.getElementById('mdlTenantName');
+      if (tenantNameEl) tenantNameEl.textContent = tk.tenant_name || '-';
+
+      const unitBadge = document.getElementById('mdlUnitBadge');
+      if (unitBadge) unitBadge.textContent = tk.unit_number || '-';
+
+      const tenantEmailEl = document.getElementById('mdlTenantEmail');
+      if (tenantEmailEl) tenantEmailEl.textContent = tk.tenant_email || 'Not on file';
+
+      // 6. Complete Issue Description
+      const descEl = document.getElementById('mdlDescription');
+      if (descEl) descEl.textContent = tk.description || tk.title || 'No additional description provided.';
+
+      // 7. Resolution Notes
+      const notesEl = document.getElementById('mdlResolutionNotes');
+      if (notesEl) notesEl.value = tk.resolution_notes || '';
+
+      // 8. Attached Photos Gallery
+      const photosContainer = document.getElementById('mdlPhotosContainer');
+      const noPhotosNotice = document.getElementById('mdlNoPhotosNotice');
+      if (photosContainer) {
         photosContainer.innerHTML = '';
         if (tk.photo_path && tk.photo_path.trim() !== '') {
+          if (noPhotosNotice) noPhotosNotice.style.display = 'none';
+          photosContainer.style.display = 'flex';
           const pList = tk.photo_path.split(',');
           pList.forEach((pItem, idx) => {
             pItem = pItem.trim();
             if (!pItem) return;
-            const a = document.createElement('a');
-            a.href = pItem;
-            a.target = '_blank';
-            a.className = 'btn-inspect-proof';
-            a.style.cssText = 'display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; font-size: 12px; border-radius: 8px; text-decoration: none;';
-            a.innerHTML = '📷 View Attached Photo ' + (pList.length > 1 ? (idx + 1) : '');
-            photosContainer.appendChild(a);
+            const card = document.createElement('div');
+            card.style.cssText = 'border: 1.5px solid rgba(166,180,204,0.35); border-radius: 10px; overflow: hidden; background: #fff; box-shadow: 0 4px 10px rgba(0,0,0,0.06); text-align: center; max-width: 160px;';
+            card.innerHTML = `
+              <a href="${pItem}" target="_blank" title="Click to view full image in a new tab" style="display: block; text-decoration: none;">
+                <img src="${pItem}" alt="Ticket Attachment" style="width: 150px; height: 110px; object-fit: cover; display: block;" onerror="this.onerror=null;this.parentElement.innerHTML='<div style=\\'padding:14px;font-size:12px;color:#4338ca;\\'>📷 Photo ' + (${pList.length > 1 ? (idx + 1) : ''}) + '</div>';">
+                <div style="font-size: 11.5px; font-weight: 700; color: #4338ca; padding: 7px 6px; background: #f8fafc; border-top: 1px solid rgba(166,180,204,0.2);">
+                  🔍 View Photo ${pList.length > 1 ? (idx + 1) : ''}
+                </div>
+              </a>
+            `;
+            photosContainer.appendChild(card);
           });
-          photosSec.style.display = 'block';
         } else {
-          photosSec.style.display = 'none';
+          photosContainer.style.display = 'none';
+          if (noPhotosNotice) noPhotosNotice.style.display = 'block';
         }
       }
 
-      document.getElementById('ticketReplyModal').classList.add('active');
-    }
-
-    // Backward compatibility helper
-    function openTicketReplyModal(id, title, tenant, unit, status, cost, notes) {
-      openTicketDetailsModal({
-        id: id,
-        title: title,
-        tenant_name: tenant,
-        unit_number: unit,
-        status: status,
-        actual_cost: cost,
-        resolution_notes: notes,
-        category: 'General',
-        priority: 'medium',
-        description: notes || title
-      });
-    }
-
-    function closeTicketReplyModal() {
-      document.getElementById('ticketReplyModal').classList.remove('active');
-    }
-
-    async function submitTicketReply() {
-      const btn = document.getElementById('btnSubmitTicketReply');
-      const id = document.getElementById('replyTicketId').value;
-      const status = document.getElementById('replyTicketStatus').value;
-      const cost = document.getElementById('replyTicketCost').value;
-      const reply = document.getElementById('replyTicketMessage').value.trim();
-
-      if (!reply) {
-        showToast('Please enter an owner response or status update note.', 'error');
-        return;
+      // 9. Open Modal with Animation & Lock Body Scroll
+      const modal = document.getElementById('ticketDetailsModal');
+      if (modal) {
+        modal.classList.add('open', 'active');
+        document.body.style.overflow = 'hidden';
       }
+    }
+
+    function closeTicketDetailsModal() {
+      const modal = document.getElementById('ticketDetailsModal');
+      if (modal) {
+        modal.classList.remove('open', 'active');
+        document.body.style.overflow = '';
+      }
+    }
+
+    function handleTicketModalBackdropClick(event) {
+      if (event.target === document.getElementById('ticketDetailsModal')) {
+        closeTicketDetailsModal();
+      }
+    }
+
+    // Escape key listener for closing modals
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape' || e.keyCode === 27) {
+        if (document.getElementById('ticketDetailsModal')?.classList.contains('open') || document.getElementById('ticketDetailsModal')?.classList.contains('active')) {
+          closeTicketDetailsModal();
+        }
+        if (document.getElementById('archivedTenantDetailsModal')?.classList.contains('open') || document.getElementById('archivedTenantDetailsModal')?.classList.contains('active')) {
+          closeArchivedTenantModal();
+        }
+      }
+    });
+
+    // Dedicated Status Update inside Modal
+    async function submitModalStatusUpdate() {
+      const btn = document.getElementById('btnModalSubmitStatus');
+      const id = document.getElementById('mdlTicketId').value;
+      const status = document.getElementById('mdlSelectStatus').value;
+      const reply = document.getElementById('mdlResolutionNotes').value.trim();
+
+      if (!id) return;
 
       const origText = btn.innerHTML;
-      btn.innerHTML = 'Saving...';
+      btn.innerHTML = '<span>Saving...</span>';
       btn.disabled = true;
 
       try {
@@ -2962,25 +4002,27 @@ $pendingReviewCount = count($pendingReviewPayments);
             action: 'reply_ticket',
             ticket_id: parseInt(id, 10),
             status: status,
-            actual_cost: parseFloat(cost) || 0,
             reply: reply
           })
         });
         const result = await res.json();
         if (result.status === 'success') {
-          showToast(result.message);
-          closeTicketReplyModal();
+          showToast(result.message || `Ticket #MT-${String(id).padStart(4, '0')} updated to ${status}.`);
 
-          // Update row in DOM in-place without page reload
-          const row = document.getElementById('ticket-row-' + id);
-          if (row) {
-            const statusSelect = row.querySelector('select');
-            if (statusSelect) statusSelect.value = status;
-            const costInput = row.querySelector('input[type="number"]');
-            if (costInput && cost) costInput.value = parseFloat(cost).toFixed(2);
+          // Update modal status badge if still open
+          const statusBadge = document.getElementById('mdlStatusBadge');
+          if (statusBadge) {
+            statusBadge.textContent = 'Status: ' + status;
+            statusBadge.className = 'clay-badge ' + (status === 'Done' ? 'badge-done' : (status === 'On-Going' ? 'badge-ongoing' : 'badge-pending'));
           }
+
+          // Immediately reflect in the main maintenance tables (DOM update and tab transfer)
+          moveTicketRowInDOM(id, status);
+
+          // Close modal
+          closeTicketDetailsModal();
         } else {
-          showToast(result.message || 'Failed to send reply', 'error');
+          showToast(result.message || 'Failed to update ticket status', 'error');
         }
       } catch (err) {
         showToast('Error communicating with ticket service', 'error');
@@ -2988,6 +4030,60 @@ $pendingReviewCount = count($pendingReviewPayments);
         btn.innerHTML = origText;
         btn.disabled = false;
       }
+    }
+
+    // Direct lookup helper (used by notifications and URL parameters)
+    window.openTicketDetailsById = async function(ticketId) {
+      if (typeof switchSection === 'function') {
+        const navBtn = document.getElementById('navMaintenanceTickets');
+        switchSection('sectionTickets', navBtn, false);
+      }
+      const row = document.getElementById('ticket-row-' + ticketId);
+      if (row) {
+        const match = (row.getAttribute('onclick') || '').match(/(?:openTicketDetailsModal|openTicketDetailPage)\(([\s\S]*)\)$/);
+        if (match && match[1]) {
+          try {
+            const tkData = JSON.parse(match[1]);
+            openTicketDetailsModal(tkData);
+            return;
+          } catch(e) {}
+        }
+      }
+      try {
+        const res = await fetch(`api/ticket_api.php?ticket_id=${ticketId}`);
+        const data = await res.json();
+        if (data.status === 'success' && data.ticket) {
+          openTicketDetailsModal(data.ticket);
+        } else {
+          showToast('Ticket not found', 'error');
+        }
+      } catch(err) {
+        showToast('Error retrieving ticket details', 'error');
+      }
+    };
+
+    // Forwarding functions for backwards compatibility
+    window.openTicketDetailPage = openTicketDetailsModal;
+    window.closeTicketDetailPage = closeTicketDetailsModal;
+    window.submitTicketStatusUpdateFromPage = submitModalStatusUpdate;
+    function openTicketReplyModal(id, title, tenant, unit, status, cost, notes) {
+      openTicketDetailsModal({
+        id: id,
+        title: title,
+        tenant_name: tenant,
+        unit_number: unit,
+        status: status,
+        resolution_notes: notes,
+        category: 'General',
+        priority: 'medium',
+        description: notes || title
+      });
+    }
+    function closeTicketReplyModal() {
+      closeTicketDetailsModal();
+    }
+    function submitTicketReply() {
+      return submitModalStatusUpdate();
     }
 
     // Rent Due Announcement Modal Controls

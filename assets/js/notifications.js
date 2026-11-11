@@ -8,14 +8,14 @@
   function getNotificationIcon(type) {
     switch (type) {
       case 'payment':
-        return '<div class="notif-icon-circle notif-icon-payment">💳</div>';
+        return '<div class="notif-icon-circle notif-icon-payment"><i data-lucide="receipt"></i></div>';
       case 'maintenance':
-        return '<div class="notif-icon-circle notif-icon-maintenance">🔧</div>';
+        return '<div class="notif-icon-circle notif-icon-maintenance"><i data-lucide="wrench"></i></div>';
       case 'announcement':
-        return '<div class="notif-icon-circle notif-icon-announcement">📢</div>';
+        return '<div class="notif-icon-circle notif-icon-announcement"><i data-lucide="bell"></i></div>';
       case 'account':
       default:
-        return '<div class="notif-icon-circle notif-icon-account">👤</div>';
+        return '<div class="notif-icon-circle notif-icon-account"><i data-lucide="user-round"></i></div>';
     }
   }
 
@@ -95,7 +95,10 @@
           <div class="notification-item ${isUnread ? 'unread' : 'read'}" 
                data-id="${n.id}" 
                data-link="${escapeHtml(n.link || '')}"
-               onclick="handleNotificationClick(event, ${n.id}, '${escapeHtml(n.link || '')}')"
+               data-ref-id="${escapeHtml(n.reference_id || '')}"
+               data-ref-type="${escapeHtml(n.reference_type || '')}"
+               data-type="${escapeHtml(n.type || '')}"
+               onclick="handleNotificationClick(event, ${n.id}, '${escapeHtml(n.link || '')}', '${escapeHtml(n.reference_id || '')}', '${escapeHtml(n.reference_type || '')}', '${escapeHtml(n.type || '')}')"
                role="button"
                tabindex="0">
             ${iconHtml}
@@ -109,6 +112,9 @@
         `;
       });
       listContainer.innerHTML = html;
+      if (window.lucide && typeof window.lucide.createIcons === 'function') {
+        window.lucide.createIcons();
+      }
     }
   }
 
@@ -139,7 +145,7 @@
     }
   };
 
-  window.handleNotificationClick = function(e, id, link) {
+  window.handleNotificationClick = function(e, id, link, refId, refType, type) {
     if (e) e.stopPropagation();
 
     // Mark as read via API
@@ -154,7 +160,7 @@
         const badge = document.getElementById('notificationBadge');
         if (badge) {
           if (data.unread_count > 0) {
-            badge.textContent = data.unread_count;
+            badge.textContent = data.unread_count > 99 ? '99+' : data.unread_count;
             badge.style.display = 'flex';
           } else {
             badge.style.display = 'none';
@@ -206,26 +212,70 @@
 
     window.closeNotificationPanel();
 
-    // Navigate to relevant section if link is provided
-    if (link) {
-      // Landlord navigation
-      if (typeof switchSection === 'function') {
-        if (link === 'sectionPayments') switchSection('sectionPayments');
-        else if (link === 'sectionTickets') switchSection('sectionTickets');
-        else if (link === 'sectionDirectory') switchSection('sectionDirectory');
-        else if (link === 'sectionProfile' && typeof openProfileView === 'function') openProfileView('accountInfo');
-        else switchSection(link);
-      }
-      // Tenant navigation
-      else if (typeof switchTenantSection === 'function') {
-        if (link === 'tenantProfile' && typeof openProfileView === 'function') {
-          openProfileView('accountInfo');
-        } else {
-          switchTenantSection(link);
+    // Navigate to relevant section and trigger inspection modal
+    // 1. Landlord Dashboard
+    if (typeof switchSection === 'function') {
+      if (type === 'payment' || refType === 'payment_submitted' || refType === 'payment_pending' || link === 'sectionPayments') {
+        switchSection('sectionPayments');
+        if (refId) {
+          if (typeof window.openPaymentDetailsById === 'function') {
+            window.openPaymentDetailsById(refId);
+          } else if (typeof openPaymentDetailsModal === 'function') {
+            const pId = parseInt(refId, 10);
+            const found = (window.allPaymentsData || []).find(p => parseInt(p.id, 10) === pId);
+            if (found) {
+              openPaymentDetailsModal(found);
+            } else {
+              fetch('api/payment_api.php?id=' + pId)
+                .then(r => r.json())
+                .then(res => {
+                  if (res.status === 'success' && res.payment) {
+                    openPaymentDetailsModal(res.payment);
+                  }
+                }).catch(() => {});
+            }
+          }
         }
-      } else if (typeof openProfileView === 'function') {
-        openProfileView('accountInfo');
+        return;
       }
+
+      if (type === 'maintenance' || refType === 'ticket_open' || refType === 'ticket_created' || link === 'sectionTickets') {
+        switchSection('sectionTickets');
+        if (refId) {
+          if (typeof window.openTicketDetailsById === 'function') {
+            window.openTicketDetailsById(refId);
+          } else if (typeof openTicketDetailsModal === 'function') {
+            const tId = parseInt(refId, 10);
+            const found = (window.allTicketsData || []).find(t => parseInt(t.id, 10) === tId);
+            if (found) {
+              openTicketDetailsModal(found);
+            } else {
+              fetch('api/ticket_api.php?id=' + tId)
+                .then(r => r.json())
+                .then(res => {
+                  if (res.status === 'success' && res.ticket) {
+                    openTicketDetailsModal(res.ticket);
+                  }
+                }).catch(() => {});
+            }
+          }
+        }
+        return;
+      }
+
+      if (link === 'sectionDirectory') switchSection('sectionDirectory');
+      else if (link === 'sectionProfile' && typeof openProfileView === 'function') openProfileView('accountInfo');
+      else if (link) switchSection(link);
+    }
+    // 2. Tenant Portal
+    else if (typeof switchTenantSection === 'function') {
+      if (link === 'tenantProfile' && typeof openProfileView === 'function') {
+        openProfileView('accountInfo');
+      } else if (link) {
+        switchTenantSection(link);
+      }
+    } else if (typeof openProfileView === 'function') {
+      openProfileView('accountInfo');
     }
   };
 

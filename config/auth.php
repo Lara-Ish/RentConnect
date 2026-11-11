@@ -106,7 +106,7 @@ class Auth {
                    un.unit_number
             FROM users u
             LEFT JOIN units un ON u.unit_id = un.id
-            WHERE (u.username = :u1 OR u.email = :u2) AND u.is_active = 1 
+            WHERE (u.username = :u1 OR u.email = :u2) AND u.is_active = 1 AND (u.is_archived = 0 OR u.is_archived IS NULL)
             LIMIT 1
         ");
         $stmt->execute([':u1' => $username, ':u2' => $username]);

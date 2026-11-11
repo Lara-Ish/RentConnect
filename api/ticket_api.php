@@ -28,7 +28,7 @@ try {
         $action = trim((string)($input['action'] ?? 'create'));
 
         // Action 1: Landlord Updates Ticket Status / Cost / Reply
-        if ($action === 'update_ticket' || $action === 'reply_ticket') {
+        if ($action === 'update_ticket' || $action === 'reply_ticket' || $action === 'update_status') {
             if (!Auth::isLandlord()) {
                 http_response_code(403);
                 echo json_encode(['status' => 'error', 'message' => 'Unauthorized action.']);
@@ -58,28 +58,52 @@ try {
                 exit;
             }
 
-            $statusToSave = !empty($newStatus) ? $newStatus : $ticketRow['status'];
-            $costToSave = $actualCost !== null ? $actualCost : (float)$ticketRow['actual_cost'];
+            // Normalize status to strictly: Pending, On-Going, or Done
+            $statusMap = [
+                'pending' => 'Pending',
+                'open' => 'Pending',
+                'on-going' => 'On-Going',
+                'ongoing' => 'On-Going',
+                'in_progress' => 'On-Going',
+                'done' => 'Done',
+                'resolved' => 'Done',
+                'closed' => 'Done'
+            ];
+            $statusKey = strtolower($newStatus);
+            if (!empty($newStatus) && isset($statusMap[$statusKey])) {
+                $statusToSave = $statusMap[$statusKey];
+            } elseif (!empty($newStatus)) {
+                $statusToSave = $newStatus;
+            } else {
+                $curKey = strtolower((string)$ticketRow['status']);
+                $statusToSave = $statusMap[$curKey] ?? ($ticketRow['status'] ?: 'Pending');
+            }
+
+            $costToSave = $actualCost !== null ? $actualCost : (float)($ticketRow['actual_cost'] ?? 0);
             $replyToSave = !empty($reply) ? $reply : ($ticketRow['resolution_notes'] ?? '');
+
+            $isResolved = in_array(strtolower($statusToSave), ['done', 'resolved', 'closed'], true);
+            $resolvedAt = $isResolved ? ($ticketRow['resolved_at'] ?: date('Y-m-d H:i:s')) : null;
 
             $stmt = $pdo->prepare("
                 UPDATE maintenance_tickets 
-                SET status = :s,
-                    actual_cost = :c,
-                    resolution_notes = :r,
-                    resolved_at = CASE WHEN :s IN ('resolved', 'closed') THEN NOW() ELSE NULL END
+                SET status = :status,
+                    actual_cost = :actual_cost,
+                    resolution_notes = :resolution_notes,
+                    resolved_at = :resolved_at
                 WHERE id = :id
             ");
             $stmt->execute([
-                ':s' => $statusToSave,
-                ':c' => $costToSave,
-                ':r' => $replyToSave,
+                ':status' => $statusToSave,
+                ':actual_cost' => $costToSave,
+                ':resolution_notes' => $replyToSave,
+                ':resolved_at' => $resolvedAt,
                 ':id' => $ticketId
             ]);
 
             // Automatically send email to Tenant regarding Owner reply and status update
             // CRITICAL: Tenant email is dynamically retrieved from database via JOIN users u ON mt.tenant_id = u.id
-            $ownerMessage = !empty($reply) ? $reply : "Your ticket status has been updated to " . ucfirst($statusToSave) . ".";
+            $ownerMessage = !empty($reply) ? $reply : "Your ticket status has been updated to " . $statusToSave . ".";
             $emailSent = false;
             $tenantId = (int)$ticketRow['tenant_id'];
             $tenantEmail = trim((string)($ticketRow['tenant_email'] ?? ''));
@@ -115,10 +139,10 @@ try {
             }
 
             // In-app notification directing to tenantMaintenance
-            $statusLabel = ucfirst($statusToSave);
-            $titleText = ($statusToSave === 'resolved' || $statusToSave === 'closed') 
-                ? 'Maintenance Request Resolved' 
-                : 'Maintenance Ticket Updated';
+            $statusLabel = $statusToSave;
+            $titleText = ($statusToSave === 'Done' || $statusToSave === 'resolved' || $statusToSave === 'closed') 
+                ? 'Maintenance Request Completed' 
+                : 'Maintenance Ticket Updated (' . $statusLabel . ')';
             $msgText = !empty($reply)
                 ? "Owner replied to ticket #{$ticketId} ('{$ticketRow['title']}'): {$reply}"
                 : "The owner updated maintenance ticket #{$ticketId} ('{$ticketRow['title']}') to status: {$statusLabel}.";
@@ -131,12 +155,12 @@ try {
                 $msgText,
                 'tenantMaintenance',
                 $ticketId,
-                'ticket_status_' . $statusToSave
+                'ticket_status_' . strtolower(str_replace('-', '', $statusToSave))
             );
 
             echo json_encode([
                 'status' => 'success',
-                'message' => "Ticket #{$ticketId} updated successfully. Response and email dispatched to tenant.",
+                'message' => "Ticket #{$ticketId} status updated to '{$statusToSave}'.",
                 'email_sent' => $emailSent,
                 'ticket' => [
                     'id' => $ticketId,
@@ -244,7 +268,7 @@ try {
             INSERT INTO maintenance_tickets 
                 (tenant_id, unit_id, title, description, photo_path, category, priority, status, actual_cost, created_at)
             VALUES 
-                (:tenant_id, :unit_id, :title, :description, :photo_path, :category, :priority, 'open', 0.00, NOW())
+                (:tenant_id, :unit_id, :title, :description, :photo_path, :category, :priority, 'Pending', 0.00, NOW())
         ");
         $stmt->execute([
             ':tenant_id' => $tenantId,
@@ -258,14 +282,20 @@ try {
 
         $newId = (int)$pdo->lastInsertId();
 
-        // Notify Landlords of newly logged maintenance ticket
+        // Retrieve unit number and ticket info for exact notification display
+        $tUnitStmt = $pdo->prepare("SELECT unit_number FROM units WHERE id = :uid LIMIT 1");
+        $tUnitStmt->execute([':uid' => $unitId]);
+        $tUnitNum = $tUnitStmt->fetchColumn() ?: ('Unit ' . $unitId);
+
         $tenantName = $tenantUser['name'] ?? 'Tenant';
-        $unitText = $unitId ? " for Unit {$unitId}" : '';
+        $subDate = date('M j, Y');
+
+        // Notify Landlords of newly logged maintenance ticket (strictly Tenant Maintenance Ticket Submission)
         NotificationService::notifyLandlords(
             $pdo,
             'maintenance',
-            'New Maintenance Ticket',
-            "New maintenance ticket #{$newId} ('{$title}') submitted by {$tenantName}{$unitText}.",
+            'Tenant Maintenance Ticket Submission',
+            "Tenant: {$tenantName} • Unit: {$tUnitNum} • Ticket Subject: {$title} • Submitted: {$subDate}",
             'sectionTickets',
             $newId,
             'ticket_open'
@@ -281,7 +311,7 @@ try {
                 'photo_path' => $photoPathStr,
                 'category' => $category,
                 'priority' => $priority,
-                'status' => 'open',
+                'status' => 'Pending',
                 'created_at' => date('Y-m-d H:i:s')
             ]
         ]);
@@ -291,6 +321,14 @@ try {
     if ($requestMethod === 'GET') {
         $currentUser = Auth::user();
         $ticketId = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+
+        $normalizeStatus = function($st) {
+            $s = strtolower((string)$st);
+            if ($s === 'open' || $s === 'pending') return 'Pending';
+            if ($s === 'in_progress' || $s === 'on-going' || $s === 'ongoing') return 'On-Going';
+            if ($s === 'resolved' || $s === 'closed' || $s === 'done') return 'Done';
+            return $st ?: 'Pending';
+        };
 
         if ($ticketId > 0) {
             $query = "
@@ -316,6 +354,8 @@ try {
                 echo json_encode(['status' => 'error', 'message' => 'Maintenance ticket not found or access restricted.']);
                 exit;
             }
+
+            $ticket['status'] = $normalizeStatus($ticket['status']);
 
             echo json_encode([
                 'status' => 'success',
@@ -343,6 +383,11 @@ try {
         $stmt = $pdo->prepare($query);
         $stmt->execute($params);
         $tickets = $stmt->fetchAll();
+
+        foreach ($tickets as &$t) {
+            $t['status'] = $normalizeStatus($t['status']);
+        }
+        unset($t);
 
         echo json_encode([
             'status' => 'success',

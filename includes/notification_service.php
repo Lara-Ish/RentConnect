@@ -114,17 +114,26 @@ class NotificationService
         $recipient = $uStmt->fetch(PDO::FETCH_ASSOC);
 
         if (!$recipient || empty($recipient['email'])) {
-            return;
+            if ($role === 'landlord') {
+                $recipientEmail = 'rentconnect2026@gmail.com';
+                $recipientName  = $recipient['name'] ?? 'Lead Dimaculangan';
+                $userUnit       = 'Office';
+            } else {
+                return;
+            }
+        } else {
+            $recipientEmail = $recipient['email'];
+            $recipientName  = $recipient['name'] ?? 'User';
+            $userUnit       = $recipient['unit_number'] ?: 'Unit';
         }
-
-        $recipientEmail = $recipient['email'];
-        $recipientName  = $recipient['name'] ?? 'User';
-        $userUnit       = $recipient['unit_number'] ?: 'Unit';
 
         // -------------------------------------------------------------
         // OWNER / LANDLORD NOTIFICATIONS
         // -------------------------------------------------------------
         if ($role === 'landlord') {
+            if (empty($recipientEmail) || !filter_var($recipientEmail, FILTER_VALIDATE_EMAIL) || str_contains($recipientEmail, 'lead.dimaculangan@rentconnect.ph')) {
+                $recipientEmail = 'rentconnect2026@gmail.com';
+            }
             // 1. Payment Proof Submitted / Verification Required
             if ($type === 'payment' && in_array($referenceType, ['payment_pending', 'payment_submitted', 'payment_verification'], true)) {
                 $amountPaid = 0.0;
@@ -495,6 +504,10 @@ class NotificationService
 
     /**
      * Send notification to all active Landlords / Owners
+     * STRICT RULE: The Owner/Admin notification bar should ONLY display notifications for:
+     *   1. Tenant Rent Payment Submission
+     *   2. Tenant Maintenance Ticket Submission
+     * All other notification events for Landlords are strictly blocked/ignored.
      */
     public static function notifyLandlords(
         PDO $pdo,
@@ -506,6 +519,14 @@ class NotificationService
         ?string $referenceType = null,
         bool $sendEmail = true
     ): void {
+        // Strictly allow only Tenant Rent Payment Submissions and Tenant Maintenance Ticket Submissions
+        $isAllowedPayment = ($type === 'payment' && in_array($referenceType, ['payment_submitted', 'payment_pending', 'payment_proof'], true));
+        $isAllowedTicket  = ($type === 'maintenance' && in_array($referenceType, ['ticket_open', 'ticket_created'], true));
+        if (!$isAllowedPayment && !$isAllowedTicket) {
+            // Drop any other notification type for Landlord
+            return;
+        }
+
         $stmt = $pdo->query("SELECT id FROM users WHERE role = 'landlord' AND is_active = 1");
         $landlords = $stmt->fetchAll(PDO::FETCH_COLUMN);
 
@@ -538,6 +559,23 @@ class NotificationService
     }
 
     /**
+     * Helper for notifying the owner/landlords
+     */
+    public static function notifyOwner(
+        string $referenceType,
+        int $tenantId,
+        string $message,
+        string $title = 'Owner Notification'
+    ): void {
+        try {
+            $pdo = Database::getConnection();
+            self::notifyLandlords($pdo, 'account', $title, $message, 'sectionDirectory', $tenantId, $referenceType, false);
+        } catch (Throwable $e) {
+            error_log("[NotificationService] notifyOwner error: " . $e->getMessage());
+        }
+    }
+
+    /**
      * Broadcast an important announcement to all active tenants
      */
     public static function broadcastAnnouncement(PDO $pdo, string $title, string $message): int
@@ -566,16 +604,37 @@ class NotificationService
 
     /**
      * Fetch all notifications for a specific user, sorted newest first
+     * Strictly enforces owner-facing rule: Landlord receives ONLY payment and ticket submissions.
      */
     public static function getForUser(PDO $pdo, int $userId, int $limit = 50): array
     {
-        $stmt = $pdo->prepare("
-            SELECT id, user_id, role, type, title, message, link, reference_id, reference_type, is_read, created_at
-            FROM notifications
-            WHERE user_id = :uid
-            ORDER BY created_at DESC
-            LIMIT :lim
-        ");
+        $roleStmt = $pdo->prepare("SELECT role FROM users WHERE id = :uid LIMIT 1");
+        $roleStmt->execute([':uid' => $userId]);
+        $userRole = (string)$roleStmt->fetchColumn();
+
+        if ($userRole === 'landlord') {
+            $stmt = $pdo->prepare("
+                SELECT id, user_id, role, type, title, message, link, reference_id, reference_type, is_read, created_at
+                FROM notifications
+                WHERE user_id = :uid
+                  AND (
+                    (type = 'payment' AND reference_type IN ('payment_submitted', 'payment_pending', 'payment_proof') AND title = 'Tenant Rent Payment Submission')
+                    OR
+                    (type = 'maintenance' AND reference_type IN ('ticket_open', 'ticket_created') AND title = 'Tenant Maintenance Ticket Submission')
+                  )
+                ORDER BY created_at DESC
+                LIMIT :lim
+            ");
+        } else {
+            $stmt = $pdo->prepare("
+                SELECT id, user_id, role, type, title, message, link, reference_id, reference_type, is_read, created_at
+                FROM notifications
+                WHERE user_id = :uid
+                ORDER BY created_at DESC
+                LIMIT :lim
+            ");
+        }
+
         $stmt->bindValue(':uid', $userId, PDO::PARAM_INT);
         $stmt->bindValue(':lim', $limit, PDO::PARAM_INT);
         $stmt->execute();
@@ -591,11 +650,29 @@ class NotificationService
     }
 
     /**
-     * Count unread notifications for a user
+     * Count unread notifications for a user (respects Landlord two-event filter)
      */
     public static function getUnreadCount(PDO $pdo, int $userId): int
     {
-        $stmt = $pdo->prepare("SELECT COUNT(*) FROM notifications WHERE user_id = :uid AND is_read = 0");
+        $roleStmt = $pdo->prepare("SELECT role FROM users WHERE id = :uid LIMIT 1");
+        $roleStmt->execute([':uid' => $userId]);
+        $userRole = (string)$roleStmt->fetchColumn();
+
+        if ($userRole === 'landlord') {
+            $stmt = $pdo->prepare("
+                SELECT COUNT(*) FROM notifications 
+                WHERE user_id = :uid 
+                  AND is_read = 0
+                  AND (
+                    (type = 'payment' AND reference_type IN ('payment_submitted', 'payment_pending', 'payment_proof') AND title = 'Tenant Rent Payment Submission')
+                    OR
+                    (type = 'maintenance' AND reference_type IN ('ticket_open', 'ticket_created') AND title = 'Tenant Maintenance Ticket Submission')
+                  )
+            ");
+        } else {
+            $stmt = $pdo->prepare("SELECT COUNT(*) FROM notifications WHERE user_id = :uid AND is_read = 0");
+        }
+
         $stmt->execute([':uid' => $userId]);
         return (int)$stmt->fetchColumn();
     }
@@ -614,15 +691,34 @@ class NotificationService
     }
 
     /**
-     * Mark all notifications as read for a user
+     * Mark all notifications as read for a user (respects Landlord filter)
      */
     public static function markAllAsRead(PDO $pdo, int $userId): bool
     {
-        $stmt = $pdo->prepare("
-            UPDATE notifications 
-            SET is_read = 1, read_at = NOW() 
-            WHERE user_id = :uid AND is_read = 0
-        ");
+        $roleStmt = $pdo->prepare("SELECT role FROM users WHERE id = :uid LIMIT 1");
+        $roleStmt->execute([':uid' => $userId]);
+        $userRole = (string)$roleStmt->fetchColumn();
+
+        if ($userRole === 'landlord') {
+            $stmt = $pdo->prepare("
+                UPDATE notifications 
+                SET is_read = 1, read_at = NOW() 
+                WHERE user_id = :uid 
+                  AND is_read = 0
+                  AND (
+                    (type = 'payment' AND reference_type IN ('payment_submitted', 'payment_pending', 'payment_proof') AND title = 'Tenant Rent Payment Submission')
+                    OR
+                    (type = 'maintenance' AND reference_type IN ('ticket_open', 'ticket_created') AND title = 'Tenant Maintenance Ticket Submission')
+                  )
+            ");
+        } else {
+            $stmt = $pdo->prepare("
+                UPDATE notifications 
+                SET is_read = 1, read_at = NOW() 
+                WHERE user_id = :uid AND is_read = 0
+            ");
+        }
+
         return $stmt->execute([':uid' => $userId]);
     }
 
@@ -665,48 +761,73 @@ class NotificationService
         $today = date('Y-m-d');
 
         if ($role === 'landlord') {
+            // Remove any notifications not conforming to the 2 strictly allowed Owner events
+            $cleanStmt = $pdo->prepare("
+                DELETE FROM notifications 
+                WHERE user_id = :uid 
+                  AND (
+                    title NOT IN ('Tenant Rent Payment Submission', 'Tenant Maintenance Ticket Submission')
+                    OR type NOT IN ('payment', 'maintenance')
+                    OR (type = 'payment' AND reference_type NOT IN ('payment_submitted', 'payment_pending', 'payment_proof'))
+                    OR (type = 'maintenance' AND reference_type NOT IN ('ticket_open', 'ticket_created'))
+                  )
+            ");
+            $cleanStmt->execute([':uid' => $userId]);
+
             // 1. Sync pending payments needing verification
+            // Required display: Tenant's name, apartment/unit number, amount paid, payment submission date
             $pendingPaymentsStmt = $pdo->query("
-                SELECT p.id, p.billing_cycle, p.amount_paid, u.name as tenant_name, un.unit_number
+                SELECT p.id, p.billing_cycle, p.amount_paid, p.payment_date, p.created_at, 
+                       u.name as tenant_name, un.unit_number
                 FROM payments p
                 JOIN users u ON p.tenant_id = u.id
                 LEFT JOIN units un ON p.unit_id = un.id
                 WHERE p.status = 'pending'
             ");
             while ($p = $pendingPaymentsStmt->fetch(PDO::FETCH_ASSOC)) {
-                $month = date('F Y', strtotime($p['billing_cycle']));
-                $unitStr = $p['unit_number'] ? ' (' . $p['unit_number'] . ')' : '';
+                $tenantName = $p['tenant_name'] ?? 'Tenant';
+                $unitNum = $p['unit_number'] ?: 'Unit';
+                $amountPaidStr = '₱' . number_format((float)$p['amount_paid'], 2);
+                $subDateRaw = !empty($p['payment_date']) ? $p['payment_date'] : (!empty($p['created_at']) ? $p['created_at'] : 'now');
+                $subDate = date('M j, Y', strtotime($subDateRaw));
+
                 self::create(
                     $pdo,
                     $userId,
                     'landlord',
                     'payment',
-                    'Payment Verification Required',
-                    "{$p['tenant_name']}{$unitStr} submitted payment proof for {$month}. Verification is required.",
+                    'Tenant Rent Payment Submission',
+                    "Tenant: {$tenantName} • Unit: {$unitNum} • Amount Paid: {$amountPaidStr} • Submitted: {$subDate}",
                     'sectionPayments',
                     (int)$p['id'],
-                    'payment_pending',
+                    'payment_submitted',
                     false // do not email on routine in-app sync
                 );
             }
 
             // 2. Sync open maintenance tickets
+            // Required display: Tenant's name, apartment/unit number, ticket subject, submission date
             $openTicketsStmt = $pdo->query("
-                SELECT mt.id, mt.title, mt.category, mt.priority, u.name as tenant_name, un.unit_number
+                SELECT mt.id, mt.title, mt.created_at, u.name as tenant_name, un.unit_number
                 FROM maintenance_tickets mt
                 JOIN users u ON mt.tenant_id = u.id
                 LEFT JOIN units un ON mt.unit_id = un.id
                 WHERE mt.status = 'open'
             ");
             while ($t = $openTicketsStmt->fetch(PDO::FETCH_ASSOC)) {
-                $unitStr = $t['unit_number'] ? ' for ' . $t['unit_number'] : '';
+                $tenantName = $t['tenant_name'] ?? 'Tenant';
+                $unitNum = $t['unit_number'] ?: 'Unit';
+                $ticketSubject = $t['title'] ?? 'Maintenance Request';
+                $subDateRaw = !empty($t['created_at']) ? $t['created_at'] : 'now';
+                $subDate = date('M j, Y', strtotime($subDateRaw));
+
                 self::create(
                     $pdo,
                     $userId,
                     'landlord',
                     'maintenance',
-                    'New Maintenance Ticket',
-                    "New maintenance ticket #{$t['id']} ('{$t['title']}') submitted by {$t['tenant_name']}{$unitStr}.",
+                    'Tenant Maintenance Ticket Submission',
+                    "Tenant: {$tenantName} • Unit: {$unitNum} • Ticket Subject: {$ticketSubject} • Submitted: {$subDate}",
                     'sectionTickets',
                     (int)$t['id'],
                     'ticket_open',

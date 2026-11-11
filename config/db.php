@@ -30,6 +30,24 @@ class Database {
         try {
             $pdo->exec("ALTER TABLE `users` ADD COLUMN IF NOT EXISTS `live_photo_filename` VARCHAR(255) NULL AFTER `id_photo_filename`");
             $pdo->exec("ALTER TABLE `users` ADD COLUMN IF NOT EXISTS `verification_notes` TEXT NULL AFTER `id_verified_at`");
+            $pdo->exec("ALTER TABLE `users` ADD COLUMN IF NOT EXISTS `terms_accepted` TINYINT(1) NOT NULL DEFAULT 0");
+            $pdo->exec("ALTER TABLE `users` ADD COLUMN IF NOT EXISTS `privacy_acknowledged` TINYINT(1) NOT NULL DEFAULT 0");
+            $pdo->exec("ALTER TABLE `users` ADD COLUMN IF NOT EXISTS `rental_status` ENUM('active', 'moved_out') NOT NULL DEFAULT 'active' AFTER `role`");
+            $pdo->exec("ALTER TABLE `users` ADD COLUMN IF NOT EXISTS `move_out_date` DATE NULL AFTER `move_in_date`");
+
+            // Allow email reuse for inactive/archived tenants while strictly enforcing uniqueness among active tenants
+            try {
+                $idxStmt = $pdo->query("SHOW INDEX FROM `users` WHERE Key_name = 'email' AND Non_unique = 0");
+                if ($idxStmt && $idxStmt->fetch()) {
+                    $pdo->exec("ALTER TABLE `users` DROP INDEX `email`");
+                }
+            } catch (Throwable $e) {}
+            try {
+                $pdo->exec("ALTER TABLE `users` ADD COLUMN IF NOT EXISTS `active_tenant_email` VARCHAR(150) GENERATED ALWAYS AS (IF(`is_active` = 1 AND (`is_archived` = 0 OR `is_archived` IS NULL), `email`, NULL)) STORED");
+                $pdo->exec("ALTER TABLE `users` ADD UNIQUE KEY IF NOT EXISTS `uq_active_tenant_email` (`active_tenant_email`)");
+                $pdo->exec("ALTER TABLE `users` ADD KEY IF NOT EXISTS `idx_users_email` (`email`)");
+            } catch (Throwable $e) {}
+
             $pdo->exec("ALTER TABLE `payments` ADD COLUMN IF NOT EXISTS `payment_type` VARCHAR(50) NOT NULL DEFAULT 'Rent' AFTER `unit_id`");
             $pdo->exec("ALTER TABLE `payments` MODIFY COLUMN `status` ENUM('pending_setup', 'unpaid', 'pending', 'approved', 'rejected', 'overdue') NOT NULL DEFAULT 'pending_setup'");
         } catch (Throwable $e) {

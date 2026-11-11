@@ -631,16 +631,23 @@ body {
 
 .badge-paid,
 .badge-approved,
-.badge-resolved {
+.badge-resolved,
+.badge-done {
   background: #d1fae5;
   color: #065f46;
 }
 
 .badge-partial,
-.badge-pending,
-.badge-in_progress {
+.badge-pending {
   background: #fef3c7;
   color: #92400e;
+}
+
+.badge-ongoing,
+.badge-on-going,
+.badge-in_progress {
+  background: #e0e7ff;
+  color: #4338ca;
 }
 
 .badge-overdue,

@@ -144,7 +144,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $userStmt = $pdo->prepare("
                     SELECT id, name, email, role, is_active 
                     FROM users 
-                    WHERE email = :email AND is_active = 1 
+                    WHERE email = :email AND is_active = 1 AND (is_archived = 0 OR is_archived IS NULL)
                     LIMIT 1
                 ");
                 $userStmt->execute([':email' => $email]);
@@ -348,7 +348,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $userStmt = $pdo->prepare("
                     SELECT id, name, email, is_active 
                     FROM users 
-                    WHERE email = :email AND is_active = 1 
+                    WHERE email = :email AND is_active = 1 AND (is_archived = 0 OR is_archived IS NULL)
                     LIMIT 1
                 ");
                 $userStmt->execute([':email' => $email]);

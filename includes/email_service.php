@@ -263,9 +263,11 @@ class EmailService
         return sendEmail($recipientEmail, $subject, $message, $recipientUserId, $pdo);
     }
 
+    public const DEFAULT_OWNER_EMAIL = 'rentconnect2026@gmail.com';
+
     /**
      * Dynamically retrieve property Owner (Landlord) record from database.
-     * Never uses hardcoded or fallback email strings.
+     * Guaranteed to return valid owner email (defaults to rentconnect2026@gmail.com).
      */
     public static function getOwnerFromDatabase(PDO $pdo): ?array
     {
@@ -279,17 +281,29 @@ class EmailService
             ");
             $stmt->execute();
             $row = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($row && !empty($row['email']) && filter_var($row['email'], FILTER_VALIDATE_EMAIL)) {
+            if ($row) {
+                $email = !empty($row['email']) && filter_var($row['email'], FILTER_VALIDATE_EMAIL)
+                    ? (string)$row['email']
+                    : self::DEFAULT_OWNER_EMAIL;
+
+                if (str_contains($email, 'lead.dimaculangan@rentconnect.ph')) {
+                    $email = self::DEFAULT_OWNER_EMAIL;
+                }
+
                 return [
                     'id'    => (int)$row['id'],
-                    'name'  => (string)$row['name'],
-                    'email' => (string)$row['email']
+                    'name'  => (string)($row['name'] ?? 'Lead Dimaculangan'),
+                    'email' => $email
                 ];
             }
         } catch (Throwable $e) {
             error_log('[EmailService] Database query error for Owner: ' . $e->getMessage());
         }
-        return null;
+        return [
+            'id'    => 1,
+            'name'  => 'Lead Dimaculangan',
+            'email' => self::DEFAULT_OWNER_EMAIL
+        ];
     }
 
     /**
@@ -531,6 +545,9 @@ class EmailService
         int $paymentId,
         ?int $recipientUserId = null
     ): bool {
+        if (empty($ownerEmail) || !filter_var($ownerEmail, FILTER_VALIDATE_EMAIL) || str_contains($ownerEmail, 'lead.dimaculangan@rentconnect.ph')) {
+            $ownerEmail = self::DEFAULT_OWNER_EMAIL;
+        }
         $subject = "New Payment Proof Submitted - {$unitNumber}";
         $monthStr = date('F Y', strtotime($billingCycle));
         $formattedAmount = '₱' . number_format($amountPaid, 2);
@@ -578,6 +595,9 @@ class EmailService
         int $ticketId,
         ?int $recipientUserId = null
     ): bool {
+        if (empty($ownerEmail) || !filter_var($ownerEmail, FILTER_VALIDATE_EMAIL) || str_contains($ownerEmail, 'lead.dimaculangan@rentconnect.ph')) {
+            $ownerEmail = self::DEFAULT_OWNER_EMAIL;
+        }
         $subject = "New Maintenance Request Received - {$unitNumber} (#{$ticketId})";
 
         $intro = "A new maintenance request has been submitted by <strong>{$tenantName}</strong> for <strong>{$unitNumber}</strong>. Please review the ticket details to take action.";
@@ -621,6 +641,9 @@ class EmailService
         int $tenantId,
         ?int $recipientUserId = null
     ): bool {
+        if (empty($ownerEmail) || !filter_var($ownerEmail, FILTER_VALIDATE_EMAIL) || str_contains($ownerEmail, 'lead.dimaculangan@rentconnect.ph')) {
+            $ownerEmail = self::DEFAULT_OWNER_EMAIL;
+        }
         $subject = "Tenant Activity Notification - {$unitNumber}";
 
         $intro = "A new resident account for <strong>{$tenantName}</strong> has been successfully provisioned and assigned to <strong>{$unitNumber}</strong>.";
@@ -1058,6 +1081,9 @@ class EmailService
         int $tenantId,
         ?int $recipientUserId = null
     ): bool {
+        if (empty($ownerEmail) || !filter_var($ownerEmail, FILTER_VALIDATE_EMAIL) || str_contains($ownerEmail, 'lead.dimaculangan@rentconnect.ph')) {
+            $ownerEmail = self::DEFAULT_OWNER_EMAIL;
+        }
         $subject = "Tenant Profile Updated - {$unitNumber} ({$tenantName})";
 
         $intro = "<strong>{$tenantName}</strong> from <strong>{$unitNumber}</strong> has updated their account or contact information in the portal.";

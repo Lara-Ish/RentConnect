@@ -40,6 +40,7 @@ try {
     if ($requestMethod === 'GET') {
         $stmt = $pdo->prepare("
             SELECT u.id, u.unit_id, u.username, u.name, u.email, u.phone, 
+                   u.profile_picture,
                    u.verification_status, u.id_type, u.id_photo_filename, 
                    u.live_photo_filename, u.verification_notes,
                    u.id_submitted_at, u.id_verified_at,
@@ -82,7 +83,147 @@ try {
 
         $action = trim((string)($input['action'] ?? 'change_password'));
 
-        // ACTION A: Submit Valid ID for Tenant Verification (Tesseract OCR + Face++ Biometrics)
+        // ACTION: Upload Profile Picture (Owner and Tenant)
+        if ($action === 'upload_profile_picture') {
+            if (!isset($_FILES['profile_picture']) || $_FILES['profile_picture']['error'] !== UPLOAD_ERR_OK) {
+                http_response_code(422);
+                echo json_encode([
+                    'status' => 'error',
+                    'message' => 'No image file uploaded or an upload error occurred.'
+                ]);
+                exit;
+            }
+
+            $picFile = $_FILES['profile_picture'];
+            $maxBytes = 5 * 1024 * 1024; // 5MB limit
+
+            if ($picFile['size'] > $maxBytes) {
+                http_response_code(422);
+                echo json_encode([
+                    'status' => 'error',
+                    'message' => 'The uploaded profile picture exceeds the 5MB size limit.'
+                ]);
+                exit;
+            }
+
+            $rawExt = strtolower(pathinfo((string)$picFile['name'], PATHINFO_EXTENSION));
+            $allowedExts = ['jpg', 'jpeg', 'png', 'webp'];
+            if (!in_array($rawExt, $allowedExts, true)) {
+                http_response_code(422);
+                echo json_encode([
+                    'status' => 'error',
+                    'message' => 'Invalid image format. Supported formats are JPG, JPEG, PNG, and WEBP.'
+                ]);
+                exit;
+            }
+
+            // Verify binary image content via getimagesize
+            $imageInfo = @getimagesize($picFile['tmp_name']);
+            if ($imageInfo === false) {
+                http_response_code(422);
+                echo json_encode([
+                    'status' => 'error',
+                    'message' => 'Uploaded file is not a valid image.'
+                ]);
+                exit;
+            }
+
+            $allowedMimes = ['image/jpeg', 'image/png', 'image/webp'];
+            $detectedMime = $imageInfo['mime'] ?? '';
+            if (!in_array($detectedMime, $allowedMimes, true)) {
+                http_response_code(422);
+                echo json_encode([
+                    'status' => 'error',
+                    'message' => 'Invalid image type detected. Allowed: JPG, PNG, WEBP.'
+                ]);
+                exit;
+            }
+
+            $uploadDir = __DIR__ . '/../uploads/avatars';
+            if (!is_dir($uploadDir)) {
+                mkdir($uploadDir, 0755, true);
+            }
+
+            // Retrieve old avatar to safely unlink after replacement
+            $oldStmt = $pdo->prepare("SELECT profile_picture FROM users WHERE id = :id LIMIT 1");
+            $oldStmt->execute([':id' => $userId]);
+            $oldAvatar = $oldStmt->fetchColumn();
+
+            $timestampStr = date('Ymd_His');
+            $randStr = bin2hex(random_bytes(4));
+            $newFilename = sprintf('avatar_u%d_%s_%s.%s', $userId, $timestampStr, $randStr, $rawExt);
+            $destination = $uploadDir . '/' . $newFilename;
+
+            if (!move_uploaded_file($picFile['tmp_name'], $destination)) {
+                http_response_code(500);
+                echo json_encode([
+                    'status' => 'error',
+                    'message' => 'Failed to save profile picture on the server.'
+                ]);
+                exit;
+            }
+
+            // Update database record
+            $updStmt = $pdo->prepare("UPDATE users SET profile_picture = :pic WHERE id = :id");
+            $updStmt->execute([':pic' => $newFilename, ':id' => $userId]);
+
+            // Clean up old avatar file safely
+            if (!empty($oldAvatar) && $oldAvatar !== $newFilename) {
+                $oldPath = $uploadDir . '/' . basename($oldAvatar);
+                if (file_exists($oldPath) && is_file($oldPath)) {
+                    @unlink($oldPath);
+                }
+            }
+
+            // Update session if current user
+            if (isset($_SESSION['user']['id']) && (int)$_SESSION['user']['id'] === $userId) {
+                $_SESSION['user']['profile_picture'] = $newFilename;
+            }
+
+            echo json_encode([
+                'status' => 'success',
+                'message' => 'Profile picture updated successfully!',
+                'profile_picture' => 'uploads/avatars/' . $newFilename,
+                'filename' => $newFilename
+            ]);
+            exit;
+        }
+
+        // ACTION: Remove Profile Picture (revert to circular initial icon)
+        if ($action === 'remove_profile_picture') {
+            $oldStmt = $pdo->prepare("SELECT profile_picture, name FROM users WHERE id = :id LIMIT 1");
+            $oldStmt->execute([':id' => $userId]);
+            $userRow = $oldStmt->fetch(PDO::FETCH_ASSOC);
+            $oldAvatar = $userRow['profile_picture'] ?? null;
+            $userName = $userRow['name'] ?? ($currentUser['name'] ?? 'U');
+
+            if (!empty($oldAvatar)) {
+                $oldPath = __DIR__ . '/../uploads/avatars/' . basename($oldAvatar);
+                if (file_exists($oldPath) && is_file($oldPath)) {
+                    @unlink($oldPath);
+                }
+            }
+
+            $updStmt = $pdo->prepare("UPDATE users SET profile_picture = NULL WHERE id = :id");
+            $updStmt->execute([':id' => $userId]);
+
+            if (isset($_SESSION['user']['id']) && (int)$_SESSION['user']['id'] === $userId) {
+                $_SESSION['user']['profile_picture'] = null;
+            }
+
+            // Calculate first name initial
+            $firstName = trim(explode(' ', trim($userName))[0]);
+            $initial = strtoupper(mb_substr($firstName, 0, 1, 'UTF-8')) ?: 'U';
+
+            echo json_encode([
+                'status' => 'success',
+                'message' => 'Profile picture removed successfully.',
+                'initial' => $initial
+            ]);
+            exit;
+        }
+
+        // ACTION A: Submit Valid ID for Tenant Verification (Tesseract OCR + Face++ Biometrics or Landlord Review)
         if ($action === 'verify_account' || $action === 'submit_verification') {
             $idType = trim((string)($input['id_type'] ?? ''));
 
@@ -91,6 +232,27 @@ try {
                 echo json_encode([
                     'status' => 'error',
                     'message' => 'Please select a valid ID type from the dropdown menu.'
+                ]);
+                exit;
+            }
+
+            $termsAccepted = !empty($input['terms_accepted']) || !empty($_POST['terms_accepted']);
+            $privacyAcknowledged = !empty($input['privacy_acknowledged']) || !empty($_POST['privacy_acknowledged']);
+
+            if (!$termsAccepted) {
+                http_response_code(422);
+                echo json_encode([
+                    'status' => 'error',
+                    'message' => 'Please review and accept the Terms & Conditions.'
+                ]);
+                exit;
+            }
+
+            if (!$privacyAcknowledged) {
+                http_response_code(422);
+                echo json_encode([
+                    'status' => 'error',
+                    'message' => 'Please acknowledge the Privacy Policy & Biometric Consent.'
                 ]);
                 exit;
             }
@@ -148,7 +310,7 @@ try {
                 exit;
             }
 
-            // 2. Validate Live Face Scan (from webcam)
+            // 2. Validate Live Face Scan (from webcam if available)
             $liveFaceFilename = sprintf('face_user%d_%s_%s.jpg', $userId, $timestampStr, $randStr);
             $liveFaceDestination = $uploadDir . '/' . $liveFaceFilename;
             $hasLiveFace = false;
@@ -168,18 +330,7 @@ try {
                 }
             }
 
-            if (!$hasLiveFace) {
-                // Remove temporary uploaded ID if live face was not provided
-                @unlink($idDestination);
-                http_response_code(422);
-                echo json_encode([
-                    'status' => 'error',
-                    'message' => 'Live face scan is required. Please capture a live photo of your face using the webcam in Step 2.'
-                ]);
-                exit;
-            }
-
-            // 3. Fetch current registered user account information
+            // Fetch current registered user account information
             $userStmt = $pdo->prepare("SELECT id, name, username, email, birthday, verification_status FROM users WHERE id = :id LIMIT 1");
             $userStmt->execute([':id' => $userId]);
             $accountUser = $userStmt->fetch();
@@ -187,6 +338,47 @@ try {
             if (!$accountUser) {
                 http_response_code(404);
                 echo json_encode(['status' => 'error', 'message' => 'User account not found.']);
+                exit;
+            }
+
+            if (!$hasLiveFace) {
+                // When webcam live face is not provided, put under Landlord Review
+                $updPending = $pdo->prepare("
+                    UPDATE users 
+                    SET verification_status = 'pending',
+                        id_type = :id_type,
+                        id_photo_filename = :id_photo,
+                        id_submitted_at = NOW(),
+                        verification_notes = 'ID photo submitted. Awaiting landlord review.'
+                    WHERE id = :id
+                ");
+                $updPending->execute([
+                    ':id_type' => $idType,
+                    ':id_photo' => $idFilename,
+                    ':id' => $userId
+                ]);
+
+                if (isset($_SESSION['user'])) {
+                    $_SESSION['user']['verification_status'] = 'pending';
+                    $_SESSION['user']['id_type'] = $idType;
+                    $_SESSION['user']['id_photo_filename'] = $idFilename;
+                }
+
+                if (class_exists('NotificationService')) {
+                    $uName = $accountUser['name'] ?? 'Tenant';
+                    NotificationService::notifyOwner(
+                        'tenant_verification_submitted',
+                        $userId,
+                        "Tenant {$uName} has submitted their {$idType} for verification."
+                    );
+                }
+
+                http_response_code(200);
+                echo json_encode([
+                    'status' => 'success',
+                    'verification_status' => 'pending',
+                    'message' => 'Your ID has been submitted successfully and is now under review by the landlord.'
+                ]);
                 exit;
             }
 
@@ -598,6 +790,27 @@ try {
                     'message' => 'Please provide a valid email address.'
                 ]);
                 exit;
+            }
+
+            if (!empty($email)) {
+                $dupCheck = $pdo->prepare("
+                    SELECT id FROM users 
+                    WHERE email = :e 
+                      AND id != :id 
+                      AND role = 'tenant' 
+                      AND is_active = 1 
+                      AND (is_archived = 0 OR is_archived IS NULL)
+                    LIMIT 1
+                ");
+                $dupCheck->execute([':e' => $email, ':id' => $userId]);
+                if ($dupCheck->fetch()) {
+                    http_response_code(409);
+                    echo json_encode([
+                        'status' => 'error',
+                        'message' => 'This email address is already associated with an active tenant account.'
+                    ]);
+                    exit;
+                }
             }
 
             $updateStmt = $pdo->prepare("

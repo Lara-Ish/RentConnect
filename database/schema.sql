@@ -44,14 +44,16 @@ CREATE TABLE `users` (
     `unit_id` INT UNSIGNED NULL COMMENT 'Assigned unit for tenants; NULL for landlord',
     `username` VARCHAR(50) NOT NULL UNIQUE,
     `name` VARCHAR(100) NOT NULL,
-    `email` VARCHAR(150) NOT NULL UNIQUE,
+    `email` VARCHAR(150) NOT NULL,
     `password_hash` VARCHAR(255) NOT NULL,
     `role` ENUM('landlord', 'tenant') NOT NULL DEFAULT 'tenant',
+    `rental_status` ENUM('active', 'moved_out') NOT NULL DEFAULT 'active',
     `verification_status` ENUM('unverified', 'pending', 'pending_liveness', 'verified', 'rejected') NOT NULL DEFAULT 'unverified',
     `is_verified` TINYINT(1) NOT NULL DEFAULT 0,
     `id_type` VARCHAR(50) NULL,
     `id_photo_filename` VARCHAR(255) NULL,
     `live_photo_filename` VARCHAR(255) NULL,
+    `profile_picture` VARCHAR(255) NULL,
     `id_submitted_at` DATETIME NULL,
     `id_verified_at` DATETIME NULL,
     `verification_notes` TEXT NULL,
@@ -62,20 +64,29 @@ CREATE TABLE `users` (
     `emergency_contact_relationship` VARCHAR(50) NULL,
     `emergency_contact_phone` VARCHAR(30) NULL,
     `move_in_date` DATE NULL,
+    `move_out_date` DATE NULL,
     `total_occupants` INT NOT NULL DEFAULT 1,
     `adults_count` INT NOT NULL DEFAULT 1,
     `kids_count` INT NOT NULL DEFAULT 0,
     `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+    `is_archived` TINYINT(1) NOT NULL DEFAULT 0,
+    `deleted_at` DATETIME NULL,
+    `archived_unit_number` VARCHAR(50) NULL,
+    `archived_monthly_rent` DECIMAL(10,2) NULL,
+    `archived_spaces_text` VARCHAR(255) NULL,
     `active_tenant_unit_id` INT UNSIGNED GENERATED ALWAYS AS (IF(role = 'tenant' AND is_active = 1, unit_id, NULL)) STORED,
+    `active_tenant_email` VARCHAR(150) GENERATED ALWAYS AS (IF(is_active = 1 AND (is_archived = 0 OR is_archived IS NULL), email, NULL)) STORED,
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     CONSTRAINT `fk_users_unit` 
         FOREIGN KEY (`unit_id`) REFERENCES `units` (`id`) 
         ON DELETE SET NULL ON UPDATE CASCADE,
     UNIQUE KEY `uq_active_tenant_unit` (`active_tenant_unit_id`),
+    UNIQUE KEY `uq_active_tenant_email` (`active_tenant_email`),
     INDEX `idx_users_role` (`role`),
     INDEX `idx_users_username` (`username`),
-    INDEX `idx_users_unit` (`unit_id`)
+    INDEX `idx_users_unit` (`unit_id`),
+    INDEX `idx_users_email` (`email`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------------------------------------------------------
@@ -90,6 +101,9 @@ CREATE TABLE `payments` (
     `payment_type` VARCHAR(50) NOT NULL DEFAULT 'Rent',
     `billing_cycle` DATE NULL DEFAULT NULL COMMENT 'First day of billing month e.g. 2026-10-01',
     `due_date` DATE NULL DEFAULT NULL,
+    `base_rent_amount` DECIMAL(10,2) NOT NULL DEFAULT 3000.00,
+    `additional_space_fee` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    `additional_spaces_breakdown` VARCHAR(255) NULL DEFAULT NULL,
     `amount_due` DECIMAL(10,2) NULL DEFAULT NULL,
     `amount_paid` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
     `payment_date` DATE NULL,
@@ -140,6 +154,37 @@ CREATE TABLE `maintenance_tickets` (
     INDEX `idx_tickets_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- ----------------------------------------------------------------------------
+-- 5. ADDITIONAL RENTAL SPACES TABLE (Parking / Extra Lots)
+-- Exactly 2 available rentable spaces at ₱1,500.00/month each.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `additional_spaces` (
+    `id` INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    `space_number` INT UNSIGNED NOT NULL UNIQUE,
+    `space_name` VARCHAR(50) NOT NULL,
+    `monthly_fee` DECIMAL(10,2) NOT NULL DEFAULT 1500.00,
+    `status` ENUM('available', 'occupied') NOT NULL DEFAULT 'available',
+    `assigned_tenant_id` INT UNSIGNED NULL,
+    `assigned_unit_id` INT UNSIGNED NULL,
+    `rented_at` DATETIME NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT `fk_additional_spaces_tenant` 
+        FOREIGN KEY (`assigned_tenant_id`) REFERENCES `users` (`id`) 
+        ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT `fk_additional_spaces_unit` 
+        FOREIGN KEY (`assigned_unit_id`) REFERENCES `units` (`id`) 
+        ON DELETE SET NULL ON UPDATE CASCADE,
+    INDEX `idx_spaces_status` (`status`),
+    INDEX `idx_spaces_tenant` (`assigned_tenant_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Seed the 2 Additional Spaces (Space 1 and Space 2)
+INSERT INTO `additional_spaces` (`id`, `space_number`, `space_name`, `monthly_fee`, `status`) VALUES
+(1, 1, 'Space 1', 1500.00, 'available'),
+(2, 2, 'Space 2', 1500.00, 'available')
+ON DUPLICATE KEY UPDATE `space_name` = VALUES(`space_name`), `monthly_fee` = VALUES(`monthly_fee`);
+
 -- ============================================================================
 -- SEED DATA: Exactly 3 Units, Exactly 1 Landlord, and Exactly 2 Active Tenants
 -- ============================================================================
@@ -153,7 +198,7 @@ INSERT INTO `units` (`id`, `unit_number`, `floor_level`, `bedrooms`, `bathrooms`
 -- 2. Landlord (Lead Dimaculangan)
 -- admin: admin123 ($2y$10$L1oJw/e9iaOxHBBWA6p0G.EEPbgJ8jKQxXLEnjzxwY0DSzno7igyO)
 INSERT INTO `users` (`id`, `unit_id`, `username`, `name`, `email`, `password_hash`, `role`, `phone`, `birthday`, `emergency_contact`, `move_in_date`) VALUES
-(1, NULL, 'admin', 'Lead Dimaculangan', 'lead.dimaculangan@rentconnect.ph', '$2y$10$L1oJw/e9iaOxHBBWA6p0G.EEPbgJ8jKQxXLEnjzxwY0DSzno7igyO', 'landlord', '+63 917 123 4567', '1985-11-20', 'Property Management Office', '2024-01-01');
+(1, NULL, 'admin', 'Lead Dimaculangan', 'rentconnect2026@gmail.com', '$2y$10$L1oJw/e9iaOxHBBWA6p0G.EEPbgJ8jKQxXLEnjzxwY0DSzno7igyO', 'landlord', '+63 917 123 4567', '1985-11-20', 'Property Management Office', '2024-01-01');
 
 -- ----------------------------------------------------------------------------
 -- TRIGGERS: ENFORCE STRICT 1 ACTIVE TENANT PER APARTMENT UNIT RESTRICTION
@@ -276,4 +321,5 @@ CREATE TABLE IF NOT EXISTS `announcement_recipients` (
         FOREIGN KEY (`tenant_id`) REFERENCES `users` (`id`) 
         ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 

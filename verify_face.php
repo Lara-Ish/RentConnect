@@ -171,6 +171,26 @@ if (!empty($_POST['upload_id_only'])) {
     sendFaceJsonResponse(422, ['status' => 'error', 'message' => 'No ID file received.']);
 }
 
+// Check Terms & Conditions and Privacy Policy acknowledgment
+$termsAccepted = !empty($_POST['terms_accepted']) || !empty($jsonPayload['terms_accepted']) || !empty($accountUser['terms_accepted']);
+$privacyAcknowledged = !empty($_POST['privacy_acknowledged']) || !empty($jsonPayload['privacy_acknowledged']) || !empty($accountUser['privacy_acknowledged']);
+
+if (!$termsAccepted && $action !== 'complete_liveness') {
+    sendFaceJsonResponse(422, [
+        'status' => 'error',
+        'is_verified' => 0,
+        'message' => 'Please review and accept the Terms & Conditions.'
+    ]);
+}
+
+if (!$privacyAcknowledged && $action !== 'complete_liveness') {
+    sendFaceJsonResponse(422, [
+        'status' => 'error',
+        'is_verified' => 0,
+        'message' => 'Please acknowledge the Privacy Policy & Biometric Consent.'
+    ]);
+}
+
 // 2. Receive & Prepare Live Face Image (Base64 or multipart)
 $liveFacePath = null;
 $liveBase64 = $_POST['live_face_data'] ?? null;
@@ -260,6 +280,15 @@ if (!$idFilePath) {
     }
 }
 
+// Case D: Fallback to registered profile picture if available
+if (!$idFilePath && !empty($accountUser['profile_picture'])) {
+    $avatarPath = __DIR__ . '/uploads/avatars/' . basename($accountUser['profile_picture']);
+    if (file_exists($avatarPath) && filesize($avatarPath) > 0) {
+        $idFilePath = $avatarPath;
+        $idFilename = basename($avatarPath);
+    }
+}
+
 if (!$idFilePath || !file_exists($idFilePath)) {
     sendFaceJsonResponse(422, [
         'status' => 'error',
@@ -273,16 +302,16 @@ if (!$idFilePath || !file_exists($idFilePath)) {
 $idType = trim((string)($_POST['id_type'] ?? ($accountUser['id_type'] ?? '')));
 $rawOcrText = trim((string)($_POST['ocr_raw_text'] ?? ''));
 
-// Scan the uploaded ID image if OCR text was not passed from frontend
-if (empty($rawOcrText) && !empty($idFilePath)) {
+// Scan the uploaded ID image if OCR text was not passed from frontend and a new ID was uploaded
+if (empty($rawOcrText) && !empty($idFilePath) && isset($_FILES['id_photo'])) {
     $ocrResult = VerificationService::extractIdDataWithOCR($idFilePath, null, $accountUser, $idType);
     if (!empty($ocrResult['raw_text'])) {
         $rawOcrText = $ocrResult['raw_text'];
     }
 }
 
-// Active OCR Cross-Checking against selected ID Type
-if (!empty($idType)) {
+// Active OCR Cross-Checking against selected ID Type (only when OCR text is available)
+if (!empty($idType) && !empty($rawOcrText)) {
     $typeCheck = VerificationService::verifyIdTypeMatchesDocument($idType, $rawOcrText);
     if (!$typeCheck['matched']) {
         // STRICT REJECTION: If a document mismatch is detected, completely halt the verification flow
@@ -319,7 +348,11 @@ $response = false;
 $curlErr = '';
 $data = null;
 
-if (isset($_SERVER['HTTP_X_MOCK_FACEPP_CONFIDENCE'])) {
+if (isset($_SERVER['HTTP_X_MOCK_FACEPP_ERROR'])) {
+    $data = [
+        'error_message' => 'SIMULATED_FACEPP_ERROR',
+    ];
+} elseif (isset($_SERVER['HTTP_X_MOCK_FACEPP_CONFIDENCE'])) {
     $mockConf = (float)$_SERVER['HTTP_X_MOCK_FACEPP_CONFIDENCE'];
     $data = [
         'confidence' => $mockConf,
@@ -351,7 +384,7 @@ if (isset($_SERVER['HTTP_X_MOCK_FACEPP_CONFIDENCE'])) {
             sendFaceJsonResponse(502, [
                 'status' => 'error',
                 'is_verified' => 0,
-                'message' => 'Face scan does not match the ID photo.'
+                'message' => 'Face verification failed. Please try again.'
             ]);
         }
 
@@ -370,7 +403,7 @@ if (!is_array($data)) {
     sendFaceJsonResponse(422, [
         'status' => 'error',
         'is_verified' => 0,
-        'message' => 'Face scan does not match the ID photo.'
+        'message' => 'Face verification failed. Please try again.'
     ]);
 }
 
@@ -380,7 +413,7 @@ if (isset($data['error_message'])) {
     sendFaceJsonResponse(422, [
         'status' => 'error',
         'is_verified' => 0,
-        'message' => 'Face scan does not match the ID photo.'
+        'message' => 'Face verification failed. Please try again.'
     ]);
 }
 
@@ -391,7 +424,7 @@ if (empty($faces2)) {
     sendFaceJsonResponse(422, [
         'status' => 'error',
         'is_verified' => 0,
-        'message' => 'Face scan does not match the ID photo.'
+        'message' => 'Face verification failed. Please try again.'
     ]);
 }
 
@@ -399,7 +432,7 @@ if (empty($faces1)) {
     sendFaceJsonResponse(422, [
         'status' => 'error',
         'is_verified' => 0,
-        'message' => 'Face scan does not match the ID photo.'
+        'message' => 'Face verification failed. Please try again.'
     ]);
 }
 
@@ -427,6 +460,8 @@ if ($isConfidenceMatch) {
             id_type = :id_type,
             id_photo_filename = :id_photo,
             live_photo_filename = :live_face,
+            terms_accepted = 1,
+            privacy_acknowledged = 1,
             id_verified_at = NOW(),
             verification_notes = :notes
         WHERE id = :id
@@ -455,16 +490,16 @@ if ($isConfidenceMatch) {
         'confidence' => round($confidence, 2),
         'threshold_1e4' => round($threshold1e4, 2),
         'threshold_1e5' => round($threshold1e5, 2),
-        'message' => 'Verification Successful'
+        'message' => 'Face verification successful!'
     ]);
 } else {
-    // Confidence below realistic baseline (>= 70.0% or 1e-4 threshold) or OCR check failed
+    // Confidence below realistic baseline (>= 70.0% or 1e-4 threshold)
     sendFaceJsonResponse(422, [
         'status' => 'error',
         'is_verified' => 0,
         'confidence' => round($confidence, 2),
         'threshold_1e4' => round($threshold1e4, 2),
         'threshold_1e5' => round($threshold1e5, 2),
-        'message' => 'Face scan does not match the ID photo.'
+        'message' => 'Face verification failed. Please try again.'
     ]);
 }

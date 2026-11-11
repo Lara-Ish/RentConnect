@@ -71,10 +71,10 @@ class MailConfig
 
         $fromEmail  = getenv('SMTP_FROM_EMAIL') ?: ($_ENV['SMTP_FROM_EMAIL'] ?? ($_SERVER['SMTP_FROM_EMAIL'] ?? ''));
         // If fromEmail is empty or default domain placeholder, use authenticated Gmail address so Google SMTP does not reject the sender
-        if (!empty($username) && (empty($fromEmail) || $fromEmail === 'notifications@rentconnect.ph' || str_contains($fromEmail, '@rentconnect.ph'))) {
+        if (!empty($username) && (empty($fromEmail) || $fromEmail === 'rentconnect2026@gmail.com' || str_contains($fromEmail, '@rentconnect.ph'))) {
             $fromEmail = $username;
         } elseif (empty($fromEmail)) {
-            $fromEmail = 'notifications@rentconnect.ph';
+            $fromEmail = 'rentconnect2026@gmail.com';
         }
 
         $fromName   = getenv('SMTP_FROM_NAME') ?: ($_ENV['SMTP_FROM_NAME'] ?? ($_SERVER['SMTP_FROM_NAME'] ?? 'TaraRent'));

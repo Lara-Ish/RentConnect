@@ -30,6 +30,12 @@ if (!$freshUser || (int)($freshUser['is_active'] ?? 0) !== 1) {
 }
 $user = $freshUser;
 
+// Resolve user avatar image URL dynamically from database record or uploaded avatar
+$userAvatarUrl = '';
+if (!empty($user['profile_picture']) && file_exists(__DIR__ . '/uploads/avatars/' . $user['profile_picture'])) {
+    $userAvatarUrl = 'uploads/avatars/' . htmlspecialchars($user['profile_picture']);
+}
+
 // Extract first letter of user's first name dynamically for profile icon (circular initial)
 $userFullName = trim((string)($user['name'] ?? 'Tenant'));
 $userFirstName = trim(explode(' ', $userFullName)[0]);
@@ -51,6 +57,20 @@ $ticketsStmt = $pdo->prepare("SELECT * FROM maintenance_tickets WHERE tenant_id 
 $ticketsStmt->execute([':tid' => $user['id']]);
 $myTickets = $ticketsStmt->fetchAll();
 
+foreach ($myTickets as &$t) {
+    $st = strtolower((string)$t['status']);
+    if ($st === 'open' || $st === 'pending') {
+        $t['status'] = 'Pending';
+    } elseif ($st === 'in_progress' || $st === 'on-going' || $st === 'ongoing') {
+        $t['status'] = 'On-Going';
+    } elseif ($st === 'resolved' || $st === 'closed' || $st === 'done') {
+        $t['status'] = 'Done';
+    } else {
+        $t['status'] = 'Pending';
+    }
+}
+unset($t);
+
 // Fetch payments for this tenant
 $paymentsStmt = $pdo->prepare("SELECT * FROM payments WHERE tenant_id = :tid ORDER BY id DESC");
 $paymentsStmt->execute([':tid' => $user['id']]);
@@ -67,6 +87,24 @@ foreach ($myPayments as $p) {
         $rentBill = $p;
     }
 }
+
+// Fetch Additional Rental Spaces (Space 1 & Space 2)
+$spacesStmt = $pdo->prepare("
+    SELECT s.*, u.name AS tenant_name, u.username AS tenant_username, un.unit_number
+    FROM additional_spaces s
+    LEFT JOIN users u ON s.assigned_tenant_id = u.id
+    LEFT JOIN units un ON s.assigned_unit_id = un.id
+    ORDER BY s.space_number ASC
+");
+$spacesStmt->execute();
+$allSpaces = $spacesStmt->fetchAll();
+
+// Determine spaces rented by current tenant vs rented by someone else
+$myRentedSpaces = array_values(array_filter($allSpaces, fn($s) => (int)($s['assigned_tenant_id'] ?? 0) === (int)$user['id']));
+$myRentedSpaceIds = array_map(fn($s) => (int)$s['id'], $myRentedSpaces);
+$myRentedSpaceCount = count($myRentedSpaces);
+$myAdditionalFee = array_reduce($myRentedSpaces, fn($carry, $s) => $carry + (float)$s['monthly_fee'], 0.00);
+$myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -94,8 +132,116 @@ foreach ($myPayments as $p) {
   <!-- Dedicated OCR Library (Tesseract.js) -->
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
+  <!-- face-api.js for 68-Point Facial Landmark Tracking (Local with CDN fallback) -->
+  <script src="assets/js/face-api.min.js"></script>
+  <script>
+    if (typeof faceapi === 'undefined') {
+      document.write('<script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.min.js"><\/script>');
+    }
+  </script>
 
   <style>
+    /* Multi-step Verification Indicator */
+    .verification-step-indicator {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 20px;
+      padding: 6px;
+      background: rgba(226, 232, 240, 0.6);
+      border-radius: 14px;
+    }
+    .step-pill {
+      flex: 1;
+      padding: 8px 12px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 800;
+      background: transparent;
+      color: var(--text-muted);
+      transition: all 0.2s ease;
+    }
+    .step-pill.active {
+      background: var(--clay-surface);
+      color: var(--clay-primary-dark);
+      box-shadow: var(--clay-button-shadow);
+    }
+
+    /* Live Face Scan Camera Mask, Oval Ring, and Status Pill */
+    .face-oval-guide {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+      z-index: 10;
+    }
+    .face-oval-ring {
+      width: 175px;
+      height: 235px;
+      border: 3px solid rgba(255, 255, 255, 0.85);
+      border-radius: 50%;
+      box-shadow: 0 0 0 9999px rgba(9, 13, 22, 0.65);
+      transition: border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease;
+      background: transparent;
+    }
+    .face-oval-ring.detecting,
+    .face-oval-ring.challenge {
+      border-color: #38bdf8 !important;
+      border-style: solid !important;
+      box-shadow: 0 0 0 9999px rgba(9, 13, 22, 0.65), 0 0 20px rgba(56, 189, 248, 0.7) !important;
+    }
+    .face-oval-ring.perfect-capturing,
+    .face-oval-ring.captured {
+      border-color: #10b981 !important;
+      border-style: solid !important;
+      box-shadow: 0 0 0 9999px rgba(9, 13, 22, 0.6), 0 0 30px rgba(16, 185, 129, 0.9) !important;
+      transform: scale(1.02);
+    }
+    .face-oval-ring.warning,
+    .face-oval-ring.spoof {
+      border-color: #f43f5e !important;
+      border-style: dashed !important;
+      box-shadow: 0 0 0 9999px rgba(9, 13, 22, 0.65), 0 0 18px rgba(244, 63, 94, 0.5) !important;
+    }
+    .face-status-pill {
+      position: absolute;
+      bottom: 12px;
+      left: 16px;
+      right: 16px;
+      background: rgba(15, 23, 42, 0.9);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      color: #ffffff;
+      padding: 7px 14px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 700;
+      text-align: center;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      z-index: 15;
+      pointer-events: none;
+    }
+    .face-status-pill.status-holding {
+      background: rgba(6, 95, 70, 0.92) !important;
+      color: #ecfdf5 !important;
+    }
+    .face-status-pill.status-spoof {
+      background: rgba(159, 18, 57, 0.92) !important;
+      color: #fff1f2 !important;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
     .modal-backdrop {
       display: none;
       position: fixed;
@@ -376,7 +522,11 @@ foreach ($myPayments as $p) {
           <!-- Circular Profile Icon Trigger with Dropdown Menu -->
           <div class="sidebar-settings-container header-settings-container" style="position: relative;">
             <div class="header-avatar-badge" id="headerAvatarBadge" onclick="toggleSettingsMenu(event)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSettingsMenu(event);}" role="button" tabindex="0" title="Account &amp; Settings" style="cursor: pointer; border-radius: 50% !important;">
-              <span class="header-avatar-initial"><?= htmlspecialchars($userInitial) ?></span>
+              <?php if (!empty($userAvatarUrl)): ?>
+                <img src="<?= $userAvatarUrl ?>" alt="<?= htmlspecialchars($user['name'] ?? 'Tenant') ?>" class="header-avatar-img">
+              <?php else: ?>
+                <span class="header-avatar-initial"><?= htmlspecialchars($userInitial) ?></span>
+              <?php endif; ?>
             </div>
 
             <!-- Profile Dropdown: Clean Glassmorphism Panel -->
@@ -385,8 +535,12 @@ foreach ($myPayments as $p) {
               <div class="fb-profile-card">
                 <!-- Main Profile Display: Avatar/Initial & Full Name (Non-clickable) -->
                 <div class="fb-profile-main-row fb-profile-display-only">
-                  <div class="fb-profile-avatar-circle">
-                    <span><?= htmlspecialchars($userInitial) ?></span>
+                  <div class="fb-profile-avatar-circle" id="profileDropdownAvatarCircle">
+                    <?php if (!empty($userAvatarUrl)): ?>
+                      <img src="<?= $userAvatarUrl ?>" alt="<?= htmlspecialchars($user['name'] ?? 'Tenant') ?>" id="profileDropdownAvatarImg">
+                    <?php else: ?>
+                      <span id="profileDropdownAvatarInitial"><?= htmlspecialchars($userInitial) ?></span>
+                    <?php endif; ?>
                   </div>
                   <div class="fb-profile-main-info">
                     <span class="fb-profile-name" id="profileDropdownName"><?= htmlspecialchars($user['name'] ?? 'Tenant') ?></span>
@@ -507,7 +661,7 @@ foreach ($myPayments as $p) {
               <div class="kpi-icon kpi-icon-cost">🛠️</div>
             </div>
             <div class="kpi-value">
-              <?= count(array_filter($myTickets, fn($t) => in_array($t['status'], ['open', 'in_progress']))) ?>
+              <?= count(array_filter($myTickets, fn($t) => in_array($t['status'], ['Pending', 'On-Going', 'open', 'in_progress']))) ?>
             </div>
             <div class="kpi-subtitle"><span>Dispatched to Landlord</span></div>
           </div>
@@ -519,7 +673,7 @@ foreach ($myPayments as $p) {
               <div class="kpi-icon kpi-icon-efficiency">✓</div>
             </div>
             <div class="kpi-value">
-              <?= count(array_filter($myTickets, fn($t) => in_array($t['status'], ['resolved', 'closed']))) ?>
+              <?= count(array_filter($myTickets, fn($t) => in_array($t['status'], ['Done', 'resolved', 'closed']))) ?>
             </div>
             <div class="kpi-subtitle"><span>Historical Completed</span></div>
           </div>
@@ -557,7 +711,7 @@ foreach ($myPayments as $p) {
                       <span class="ticket-date"><?= date('M j, Y', strtotime($tk['created_at'])) ?></span>
                     </div>
                   </div>
-                  <span class="clay-badge badge-<?= $tk['status'] ?>"><?= strtoupper($tk['status']) ?></span>
+                  <span class="clay-badge badge-<?= $tk['status'] === 'Done' ? 'done' : ($tk['status'] === 'On-Going' ? 'ongoing' : 'pending') ?>"><?= htmlspecialchars($tk['status']) ?></span>
                 </div>
                 <?php endforeach; ?>
               <?php endif; ?>
@@ -623,6 +777,13 @@ foreach ($myPayments as $p) {
                 <p style="font-size: 13px; color: var(--text-muted);">Please provide details so we can dispatch repairs promptly</p>
               </div>
               <span class="widget-badge">Direct Dispatch</span>
+            </div>
+
+            <div style="margin-top: 14px; padding: 12px 16px; background: #f0fdf4; border: 1.5px solid #bbf7d0; border-radius: var(--radius-md); display: flex; align-items: center; gap: 10px;">
+              <span style="font-size: 18px;">💡</span>
+              <div style="font-size: 12.5px; color: #166534; line-height: 1.45;">
+                <strong>Repairs are Owner-Covered:</strong> All maintenance, servicing, and repair costs are paid directly by the property owner. You will never be charged any maintenance fees for submitting requests.
+              </div>
             </div>
 
             <form id="maintenanceForm" style="margin-top: 18px;">
@@ -727,7 +888,7 @@ foreach ($myPayments as $p) {
                       </div>
                     <?php endif; ?>
                   </div>
-                  <span class="clay-badge badge-<?= $tk['status'] ?>"><?= strtoupper($tk['status']) ?></span>
+                  <span class="clay-badge badge-<?= $tk['status'] === 'Done' ? 'done' : ($tk['status'] === 'On-Going' ? 'ongoing' : 'pending') ?>"><?= htmlspecialchars($tk['status']) ?></span>
                 </div>
                 <?php endforeach; ?>
               <?php endif; ?>
@@ -777,8 +938,15 @@ foreach ($myPayments as $p) {
                     <?= $rentBill ? ($rentBill['status'] === 'pending' ? 'PENDING REVIEW' : strtoupper($rentBill['status'])) : 'UNPAID' ?>
                   </span>
                 </div>
-                <div style="font-size: 20px; font-weight: 800; color: #14532d; margin-top: 6px;">₱3,000.00</div>
-                <div style="font-size: 11.5px; color: #166534; margin-top: 4px;">Recurring monthly rental fee for <?= htmlspecialchars($unit['unit_number']) ?></div>
+                <div style="font-size: 20px; font-weight: 800; color: #14532d; margin-top: 6px;">₱<?= number_format((float)($rentBill['amount_due'] ?? $myTotalMonthlyRent), 2) ?></div>
+                <div style="font-size: 11.5px; color: #166534; margin-top: 4px;">
+                  Base rent ₱<?= number_format((float)($rentBill['base_rent_amount'] ?? 3000.00), 2) ?>
+                  <?php if (!empty($rentBill['additional_space_fee']) && (float)$rentBill['additional_space_fee'] > 0): ?>
+                    + ₱<?= number_format((float)$rentBill['additional_space_fee'], 2) ?> (<?= htmlspecialchars($rentBill['additional_spaces_breakdown'] ?? 'Additional Space') ?>)
+                  <?php elseif ($myAdditionalFee > 0): ?>
+                    + ₱<?= number_format($myAdditionalFee, 2) ?> (Additional Rental Space)
+                  <?php endif; ?>
+                </div>
               </div>
             </div>
 
@@ -900,9 +1068,16 @@ foreach ($myPayments as $p) {
                       <?php if ($py['status'] === 'pending_setup'): ?>
                         Amount: <?= $py['amount_due'] !== null ? '₱' . number_format((float)$py['amount_due'], 2) : 'Awaiting configuration by Owner' ?>
                       <?php elseif ($py['status'] === 'unpaid'): ?>
-                        Amount Due: ₱<?= number_format((float)$py['amount_due'], 2) ?> (Due: <?= !empty($py['due_date']) ? date('M j, Y', strtotime($py['due_date'])) : 'Pending' ?>)
+                        Amount Due: ₱<?= number_format((float)$py['amount_due'], 2) ?>
+                        <?php if (!empty($py['additional_space_fee']) && (float)$py['additional_space_fee'] > 0): ?>
+                          <span style="color: #7c3aed; font-weight: 700; font-size: 11.5px;">(includes ₱<?= number_format((float)$py['additional_space_fee'], 2) ?> space)</span>
+                        <?php endif; ?>
+                        (Due: <?= !empty($py['due_date']) ? date('M j, Y', strtotime($py['due_date'])) : 'Pending' ?>)
                       <?php else: ?>
                         ₱<?= number_format((float)$py['amount_paid'], 2) ?> paid on <?= $py['payment_date'] ?? 'Pending' ?>
+                        <?php if (!empty($py['additional_space_fee']) && (float)$py['additional_space_fee'] > 0): ?>
+                          <span style="color: #7c3aed; font-weight: 700; font-size: 11px;">(incl. ₱<?= number_format((float)$py['additional_space_fee'], 2) ?> space)</span>
+                        <?php endif; ?>
                       <?php endif; ?>
                     </div>
                     <?php if (!empty($py['verification_notes'])): ?>
@@ -937,7 +1112,7 @@ foreach ($myPayments as $p) {
 
       </section>
 
-      <!-- CATEGORY 4: RESIDENT PROFILE (VIEW WITH INTERNAL SUB-SIDEBAR) -->
+      <!-- CATEGORY 5: RESIDENT PROFILE (VIEW WITH INTERNAL SUB-SIDEBAR) -->
       <section id="tenantProfile" class="app-view-section">
         <div class="dashboard-header-bar">
           <div class="dashboard-title-group">
@@ -988,6 +1163,42 @@ foreach ($myPayments as $p) {
                         </span>
                       <?php endif; ?>
                     <?php endif; ?>
+                  </div>
+                </div>
+
+                <!-- Profile Picture Customization Card -->
+                <div class="profile-picture-section" style="display: flex; align-items: center; gap: 24px; padding: 20px; background: rgba(255, 255, 255, 0.65); border: 1.5px solid rgba(226, 232, 240, 0.8); border-radius: 16px; margin-bottom: 24px; flex-wrap: wrap;">
+                  <div class="avatar-preview-wrapper" style="position: relative; width: 96px; height: 96px; flex-shrink: 0;">
+                    <img id="avatarPreviewImg" src="<?= !empty($userAvatarUrl) ? $userAvatarUrl : '' ?>" alt="Profile Preview" style="width: 96px; height: 96px; border-radius: 50%; object-fit: cover; border: 3px solid #8b5cf6; box-shadow: 0 4px 14px rgba(139,92,246,0.25); display: <?= !empty($userAvatarUrl) ? 'block' : 'none' ?>;">
+                    <div id="avatarFallbackInitial" style="width: 96px; height: 96px; border-radius: 50%; background: linear-gradient(135deg, #7c3aed 0%, #a855f7 100%); color: #ffffff; display: <?= !empty($userAvatarUrl) ? 'none' : 'flex' ?>; align-items: center; justify-content: center; font-size: 38px; font-weight: 800; box-shadow: 0 4px 14px rgba(139,92,246,0.25);">
+                      <?= htmlspecialchars($userInitial) ?>
+                    </div>
+                  </div>
+                  <div style="flex: 1; min-width: 240px;">
+                    <h3 style="margin: 0 0 6px 0; font-size: 16px; font-weight: 700; color: #1e1b4b;">Profile Picture</h3>
+                    <p style="margin: 0 0 14px 0; font-size: 13px; color: #64748b; line-height: 1.4;">
+                      Upload a customized profile photo (JPG, PNG, or WEBP up to 5MB). If removed, your profile reverts to your initial icon.
+                    </p>
+                    <input type="file" id="profilePictureInput" accept="image/jpeg,image/png,image/webp" style="display: none;" onchange="handleProfilePictureSelected(event)">
+                    
+                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                      <button type="button" class="clay-btn clay-btn-primary" style="padding: 7px 16px; font-size: 13px; display: inline-flex; align-items: center; gap: 6px;" onclick="document.getElementById('profilePictureInput').click()">
+                        <i data-lucide="camera" style="width: 15px; height: 15px;"></i> Choose Photo
+                      </button>
+
+                      <div id="avatarPendingActions" style="display: none; align-items: center; gap: 8px;">
+                        <button type="button" class="clay-btn btn-success" id="btnSaveAvatar" style="padding: 7px 16px; font-size: 13px; background: #10b981; color: #fff; border: none; border-radius: 10px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;" onclick="submitProfilePictureUpload()">
+                          <i data-lucide="check" style="width: 15px; height: 15px;"></i> Save Changes
+                        </button>
+                        <button type="button" class="clay-btn clay-btn-secondary" id="btnCancelAvatar" style="padding: 7px 14px; font-size: 13px; display: inline-flex; align-items: center; gap: 6px;" onclick="cancelProfilePictureSelection()">
+                          Cancel
+                        </button>
+                      </div>
+
+                      <button type="button" class="clay-btn" id="btnRemoveAvatar" style="padding: 7px 14px; font-size: 13px; color: #ef4444; background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 10px; cursor: pointer; display: <?= !empty($userAvatarUrl) ? 'inline-flex' : 'none' ?>; align-items: center; gap: 6px;" onclick="confirmRemoveProfilePicture()">
+                        <i data-lucide="trash-2" style="width: 15px; height: 15px;"></i> Remove Photo
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -1086,15 +1297,22 @@ foreach ($myPayments as $p) {
                     </div>
                   <?php elseif (($user['verification_status'] ?? '') === 'pending'): ?>
                     <div style="background: #fefce8; border: 1.5px solid #fef08a; border-radius: var(--radius-lg); padding: 18px 22px;">
-                      <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 6px;">
-                        <span style="font-size: 20px;">⏳</span>
-                        <div style="font-size: 15px; font-weight: 800; color: #854d0e;">ID Verification Under Landlord Review</div>
-                      </div>
-                      <div style="font-size: 13px; color: #713f12;">
-                        Submitted ID: <strong><?= htmlspecialchars($user['id_type'] ?? 'ID Document') ?></strong> on <?= !empty($user['id_submitted_at']) ? date('M j, Y g:i A', strtotime($user['id_submitted_at'])) : 'Recently' ?>.
-                        <?php if (!empty($user['id_photo_filename'])): ?>
-                          <a href="uploads/id_verifications/<?= htmlspecialchars($user['id_photo_filename']) ?>" target="_blank" style="margin-left: 10px; color: var(--clay-primary-dark); font-weight: 700; text-decoration: underline;">View Uploaded ID Photo</a>
-                        <?php endif; ?>
+                      <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px;">
+                        <div>
+                          <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 6px;">
+                            <span style="font-size: 20px;">⏳</span>
+                            <div style="font-size: 15px; font-weight: 800; color: #854d0e;">ID Verification Under Landlord Review</div>
+                          </div>
+                          <div style="font-size: 13px; color: #713f12;">
+                            Submitted ID: <strong><?= htmlspecialchars($user['id_type'] ?? 'ID Document') ?></strong> on <?= !empty($user['id_submitted_at']) ? date('M j, Y g:i A', strtotime($user['id_submitted_at'])) : 'Recently' ?>.
+                            <?php if (!empty($user['id_photo_filename'])): ?>
+                              <a href="uploads/id_verifications/<?= htmlspecialchars($user['id_photo_filename']) ?>" target="_blank" style="margin-left: 10px; color: var(--clay-primary-dark); font-weight: 700; text-decoration: underline;">View Uploaded ID Photo</a>
+                            <?php endif; ?>
+                          </div>
+                        </div>
+                        <button type="button" class="clay-btn clay-btn-primary" id="btnVerifyAccount" onclick="openVerifyAccountModal()" style="background: linear-gradient(135deg, #10b981, #059669); box-shadow: 6px 6px 14px rgba(16, 185, 129, 0.35); padding: 10px 22px;">
+                          <span>📷 Live Face Scan</span>
+                        </button>
                       </div>
                     </div>
                   <?php endif; ?>
@@ -1254,7 +1472,7 @@ foreach ($myPayments as $p) {
   </div>
 
   <!-- =====================================================================
-       MODAL: TENANT ID VERIFICATION INTERFACE
+       MODAL: TENANT ID VERIFICATION INTERFACE (MULTI-STEP & LIVE FACE SCAN)
        ===================================================================== -->
   <div class="modal-backdrop" id="verifyAccountModal" style="display: none; pointer-events: none;">
     <div class="clay-modal" style="max-width: 520px; width: 100%;">
@@ -1262,70 +1480,249 @@ foreach ($myPayments as $p) {
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
         <div>
           <h2 style="font-size: 20px; font-weight: 800; color: #0f172a; margin: 0 0 2px 0;">Verify Your Account</h2>
-          <p style="font-size: 12.5px; color: var(--text-muted); margin: 0;">Submit a valid government or student ID for residency verification</p>
+          <p style="font-size: 12.5px; color: var(--text-muted); margin: 0;">Multi-step identity &amp; live biometric verification</p>
         </div>
         <button type="button" class="btn-remove-file" onclick="closeVerifyAccountModal()" title="Close">✕</button>
+      </div>
+
+      <!-- Step Progress Indicator: 1. Upload ID -> 2. Live Face Scan -->
+      <div class="verification-step-indicator">
+        <div id="stepPill1" class="step-pill active">
+          <span style="width: 22px; height: 22px; border-radius: 50%; background: var(--clay-primary); color: white; display: inline-flex; align-items: center; justify-content: center; font-size: 11px;">1</span>
+          <span>Upload Valid ID</span>
+        </div>
+        <div style="color: var(--text-muted); font-size: 14px; font-weight: 700;">→</div>
+        <div id="stepPill2" class="step-pill">
+          <span style="width: 22px; height: 22px; border-radius: 50%; background: #cbd5e1; color: #475569; display: inline-flex; align-items: center; justify-content: center; font-size: 11px;">2</span>
+          <span>Live Face Scan</span>
+        </div>
       </div>
 
       <!-- Error / Alert Banner inside modal -->
       <div id="verifyModalAlert" style="display: none; margin-bottom: 16px; padding: 12px 16px; border-radius: var(--radius-md); font-size: 12.5px; font-weight: 600; line-height: 1.4; border: 1.5px solid #fecdd3; background: #fff1f2; color: #9f1239;"></div>
 
       <form id="verifyAccountForm" enctype="multipart/form-data">
-        <!-- Dropdown menu to select a Valid ID Type -->
-        <div class="form-group" style="margin-bottom: 16px;">
-          <label class="form-label" for="idTypeSelect">Valid ID Type <span class="req">*</span></label>
-          <select id="idTypeSelect" name="id_type" class="clay-select" required>
-            <option value="" disabled selected> Select Valid ID Type </option>
-            <option value="National ID">National ID</option>
-            <option value="Driver's License">Driver's License</option>
-            <option value="Passport">Passport</option>
-            <option value="UMID">UMID</option>
-            <option value="SSS / GSIS ID">SSS / GSIS ID</option>
-            <option value="PRC ID">PRC ID</option>
-            <option value="Postal ID">Postal ID</option>
-            <option value="Voter's ID">Voter's ID</option>
-            <option value="PhilHealth ID">PhilHealth ID</option>
-            <option value="Student ID">Student ID</option>
-            <option value="Other Valid Government ID">Other Valid Government ID</option>
-          </select>
-        </div>
-
-        <!-- File Upload Field to Submit a Photo of the ID -->
-        <div class="form-group">
-          <label class="form-label">Photo of Valid ID <span class="req">*</span></label>
-          <div class="drop-zone" id="idDropZone" style="cursor: pointer; padding: 24px 16px;">
-            <div class="drop-zone-icon" style="font-size: 34px;">🪪</div>
-            <div class="drop-zone-text" style="font-size: 14px; font-weight: 700;">Click to browse or drag &amp; drop ID photo</div>
-            <div class="drop-zone-hint" style="font-size: 12px; margin-top: 4px;">Supports JPG, PNG, WEBP (Max 10MB)</div>
+        <!-- ================= STEP 1: SELECT ID TYPE & UPLOAD ID ================= -->
+        <div id="verifyStep1View">
+          <!-- Dropdown menu to select a Valid ID Type -->
+          <div class="form-group" style="margin-bottom: 16px;">
+            <label class="form-label" for="idTypeSelect">Valid ID Type <span class="req">*</span></label>
+            <select id="idTypeSelect" name="id_type" class="clay-select" required>
+              <option value="" disabled selected> Select Valid ID Type </option>
+              <option value="National ID">National ID</option>
+              <option value="Driver's License">Driver's License</option>
+              <option value="Passport">Passport</option>
+              <option value="UMID">UMID</option>
+              <option value="SSS / GSIS ID">SSS / GSIS ID</option>
+              <option value="PRC ID">PRC ID</option>
+              <option value="Postal ID">Postal ID</option>
+              <option value="Voter's ID">Voter's ID</option>
+              <option value="PhilHealth ID">PhilHealth ID</option>
+              <option value="Student ID">Student ID</option>
+              <option value="Other Valid Government ID">Other Valid Government ID</option>
+            </select>
           </div>
-          <input type="file" id="idFileInput" name="id_photo" accept="image/jpeg,image/png,image/webp" style="display: none;" required>
 
-          <!-- Visual ID Image Preview Card -->
-          <div id="idImagePreviewCard" style="display: none; margin-top: 14px; border-radius: var(--radius-lg); overflow: hidden; background: #0f172a; box-shadow: var(--clay-sunken-shadow); border: 1.5px solid rgba(203, 213, 225, 0.8);">
-            <div style="position: relative; width: 100%; height: 210px; background: #0f172a; display: flex; align-items: center; justify-content: center; overflow: hidden;">
-              <img id="idVisualPreviewImg" src="" alt="Uploaded ID Preview" style="width: 100%; height: 100%; object-fit: contain; display: block;">
-              <button type="button" class="btn-remove-file" id="btnRemoveIdFile" onclick="removeIdFile(event)" title="Change or Remove ID" style="position: absolute; top: 10px; right: 10px; background: rgba(15, 23, 42, 0.75); color: #ffffff; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; cursor: pointer; border: 1.5px solid rgba(255, 255, 255, 0.3); backdrop-filter: blur(4px);">✕</button>
+          <!-- File Upload Field to Submit a Photo of the ID -->
+          <div class="form-group">
+            <label class="form-label">Photo of Valid ID <span class="req">*</span></label>
+            <div class="drop-zone" id="idDropZone" style="cursor: pointer; padding: 24px 16px;">
+              <div class="drop-zone-icon" style="font-size: 34px;">🪪</div>
+              <div class="drop-zone-text" style="font-size: 14px; font-weight: 700;">Click to browse or drag &amp; drop ID photo</div>
+              <div class="drop-zone-hint" style="font-size: 12px; margin-top: 4px;">Supports JPG, PNG, WEBP (Max 10MB)</div>
             </div>
-            <div style="padding: 10px 14px; background: var(--clay-surface); display: flex; align-items: center; justify-content: space-between; gap: 10px; border-top: 1px solid rgba(226, 232, 240, 0.8);">
-              <div style="display: flex; align-items: center; gap: 8px; overflow: hidden;">
-                <span style="font-size: 18px;">🪪</span>
-                <div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                  <div id="idPreviewFileName" style="font-size: 12.5px; font-weight: 700; color: #0f172a; overflow: hidden; text-overflow: ellipsis;"></div>
-                  <div id="idPreviewFileSize" style="font-size: 11px; color: var(--text-muted);"></div>
-                </div>
+            <input type="file" id="idFileInput" name="id_photo" accept="image/jpeg,image/png,image/webp" style="display: none;" required>
+
+            <!-- Visual ID Image Preview Card -->
+            <div id="idImagePreviewCard" style="display: none; margin-top: 14px; border-radius: var(--radius-lg); overflow: hidden; background: #0f172a; box-shadow: var(--clay-sunken-shadow); border: 1.5px solid rgba(203, 213, 225, 0.8);">
+              <div style="position: relative; width: 100%; height: 210px; background: #0f172a; display: flex; align-items: center; justify-content: center; overflow: hidden;">
+                <img id="idVisualPreviewImg" src="" alt="Uploaded ID Preview" style="width: 100%; height: 100%; object-fit: contain; display: block;">
+                <button type="button" class="btn-remove-file" id="btnRemoveIdFile" onclick="removeIdFile(event)" title="Change or Remove ID" style="position: absolute; top: 10px; right: 10px; background: rgba(15, 23, 42, 0.75); color: #ffffff; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; cursor: pointer; border: 1.5px solid rgba(255, 255, 255, 0.3); backdrop-filter: blur(4px);">✕</button>
               </div>
-              <span class="clay-badge badge-low" style="font-size: 11px; padding: 4px 10px; font-weight: 700;">✓ ID Attached</span>
+              <div style="padding: 10px 14px; background: var(--clay-surface); display: flex; align-items: center; justify-content: space-between; gap: 10px; border-top: 1px solid rgba(226, 232, 240, 0.8);">
+                <div style="display: flex; align-items: center; gap: 8px; overflow: hidden;">
+                  <span style="font-size: 18px;">🪪</span>
+                  <div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                    <div id="idPreviewFileName" style="font-size: 12.5px; font-weight: 700; color: #0f172a; overflow: hidden; text-overflow: ellipsis;"></div>
+                    <div id="idPreviewFileSize" style="font-size: 11px; color: var(--text-muted);"></div>
+                  </div>
+                </div>
+                <span class="clay-badge badge-low" style="font-size: 11px; padding: 4px 10px; font-weight: 700;">✓ ID Attached</span>
+              </div>
             </div>
+          </div>
+
+          <!-- Required Terms & Conditions Checkbox -->
+          <div style="margin-top: 16px; padding: 12px 14px; background: #faf5ff; border: 1.5px solid #e9d5ff; border-radius: var(--radius-md);">
+            <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; user-select: none;">
+              <input type="checkbox" id="checkTermsAgreement" name="terms_accepted" value="1" style="width: 18px; height: 18px; margin-top: 2px; accent-color: var(--clay-primary); cursor: pointer;" required>
+              <span style="font-size: 13px; color: #1e1b4b; line-height: 1.45;">
+                I have read and agree to the <a href="javascript:void(0)" onclick="openTermsModal(event)" style="color: var(--clay-primary-dark); font-weight: 700; text-decoration: underline;">Terms &amp; Conditions</a>. <span class="req" style="color: #e11d48;">*</span>
+              </span>
+            </label>
+          </div>
+
+          <!-- Required Privacy Policy & Biometric Consent Checkbox -->
+          <div style="margin-top: 10px; padding: 12px 14px; background: #faf5ff; border: 1.5px solid #e9d5ff; border-radius: var(--radius-md);">
+            <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; user-select: none;">
+              <input type="checkbox" id="checkPrivacyAgreement" name="privacy_acknowledged" value="1" style="width: 18px; height: 18px; margin-top: 2px; accent-color: var(--clay-primary); cursor: pointer;" required>
+              <span style="font-size: 13px; color: #1e1b4b; line-height: 1.45;">
+                I acknowledge that I have read and understood the <a href="javascript:void(0)" onclick="openPrivacyModal(event)" style="color: var(--clay-primary-dark); font-weight: 700; text-decoration: underline;">Privacy Policy</a> and consent to the secure processing of my biometric verification data. <span class="req" style="color: #e11d48;">*</span>
+              </span>
+            </label>
+          </div>
+
+          <!-- Step 1 Navigation Buttons -->
+          <div style="display: flex; gap: 12px; margin-top: 22px;">
+            <button type="button" class="clay-btn clay-btn-secondary" style="flex: 1;" onclick="closeVerifyAccountModal()">Cancel</button>
+            <button type="button" class="clay-btn clay-btn-primary" style="flex: 2;" id="btnNextStep1" onclick="goToVerificationStep(2)">
+              <span>Next: Live Face Scan →</span>
+            </button>
           </div>
         </div>
 
-        <div style="display: flex; gap: 12px; margin-top: 24px;">
-          <button type="button" class="clay-btn clay-btn-secondary" style="flex: 1;" onclick="closeVerifyAccountModal()">Cancel</button>
-          <button type="submit" class="clay-btn clay-btn-primary" style="flex: 2;" id="btnSubmitVerification">
-            <span>Submit ID for Verification</span>
-          </button>
+        <!-- ================= STEP 2: DEDICATED LIVE FACE SCAN & BIOMETRIC VERIFICATION ================= -->
+        <div id="verifyStep2View" style="display: none;">
+          <div style="text-align: center; margin-bottom: 12px;">
+            <h3 style="font-size: 16px; font-weight: 800; color: #0f172a; margin: 0 0 4px 0;">Step 2: Live Face Scan</h3>
+            <p style="font-size: 12.5px; color: var(--text-muted); margin: 0;">Look directly into the camera and follow the real-time instructions.</p>
+          </div>
+
+          <!-- Active Movement Instruction Banner -->
+          <div id="livenessInstructionBanner" style="margin-bottom: 14px; padding: 12px 16px; border-radius: var(--radius-lg); background: #f0fdf4; border: 1.5px solid #86efac; display: flex; align-items: center; gap: 12px; box-shadow: var(--clay-button-shadow);">
+            <div id="livenessInstructionIconBox" style="width: 36px; height: 36px; border-radius: 10px; background: #dcfce7; color: #16a34a; display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 800; flex-shrink: 0;">
+              👀
+            </div>
+            <div>
+              <div style="font-size: 11px; font-weight: 800; color: #15803d; text-transform: uppercase; letter-spacing: 0.5px;">Live Scan Instruction</div>
+              <div id="livenessChallengeText" style="font-size: 13.5px; font-weight: 800; color: #166534;">
+                Position your face in the camera.
+              </div>
+            </div>
+          </div>
+
+          <!-- Live Webcam Feed for Pure Landmark Motion Analysis & Auto-Capture -->
+          <div style="position: relative; width: 100%; max-width: 380px; height: 260px; margin: 0 auto; border-radius: 18px; overflow: hidden; background: #0f172a; box-shadow: var(--clay-sunken-shadow); display: flex; align-items: center; justify-content: center;">
+            <video id="livenessVideo" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); -webkit-transform: scaleX(-1);"></video>
+
+            <!-- Hidden canvas to grab auto-capture snapshot -->
+            <canvas id="livenessCaptureCanvas" style="display: none;"></canvas>
+
+            <!-- Guide oval cutout -->
+            <div class="face-oval-guide">
+              <div id="livenessOvalRing" class="face-oval-ring"></div>
+            </div>
+
+            <!-- Dynamic Status Pill -->
+            <div id="livenessStatusPill" class="face-status-pill">
+              <span id="livenessStatusIcon">👀</span>
+              <span id="livenessStatusText">Position your face in the camera.</span>
+            </div>
+
+            <!-- Loading overlay when finalizing -->
+            <div id="livenessFinalizingOverlay" style="display: none; position: absolute; inset: 0; background: rgba(15, 23, 42, 0.92); z-index: 25; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: white; padding: 20px; text-align: center;">
+              <div id="livenessLoadingSpinner" style="width: 38px; height: 38px; border: 3.5px solid rgba(255,255,255,0.2); border-top-color: #38bdf8; border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
+              <div style="font-size: 15.5px; font-weight: 800; color: #f8fafc;" id="livenessFinalizingTitle">Comparing with registered Face ID...</div>
+              <div style="font-size: 12.5px; color: #94a3b8;" id="livenessFinalizingSub">Please hold still while we verify your identity.</div>
+            </div>
+          </div>
+
+          <!-- Subtext notice -->
+          <div style="text-align: center; margin-top: 12px;">
+            <div style="font-size: 12px; font-weight: 600; color: #64748b;" id="livenessSubNotice">
+              Ensure good lighting. The system automatically verifies your face without requiring manual capture.
+            </div>
+          </div>
+
+          <!-- Navigation & Action Buttons: Back button to Step 1 + Retry button (if failed) -->
+          <div style="display: flex; gap: 10px; margin-top: 18px;">
+            <button type="button" class="clay-btn clay-btn-secondary" style="flex: 1;" id="btnBackToStep1" onclick="goToVerificationStep(1)">
+              <span>← Back to ID</span>
+            </button>
+            <button type="button" class="clay-btn clay-btn-primary" style="flex: 1; display: none; background: linear-gradient(135deg, #f43f5e, #e11d48);" id="btnLivenessRetry" onclick="restartLivenessScan()">
+              <span>🔄 Try Again</span>
+            </button>
+          </div>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       MODAL: APARTMENT TERMS & CONDITIONS
+       ===================================================================== -->
+  <div class="modal-backdrop" id="termsContentModal" style="display: none; z-index: 10050;">
+    <div class="clay-modal" style="max-width: 620px; width: 100%; max-height: 85vh; display: flex; flex-direction: column;">
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1.5px solid #f1f5f9;">
+        <div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <h2 style="font-size: 18px; font-weight: 800; color: #0f172a; margin: 0;">Apartment Terms &amp; Conditions</h2>
+            <span class="clay-badge" style="font-size: 11px; padding: 2px 8px; background: #e0e7ff; color: #3730a3; font-weight: 700;">TaraRent</span>
+          </div>
+          <p style="font-size: 12px; color: var(--text-muted); margin: 3px 0 0 0;">Apartment Rental Agreement Guidelines</p>
+        </div>
+        <button type="button" class="btn-remove-file" onclick="closeTermsModal()" title="Close">✕</button>
+      </div>
+
+      <div style="flex: 1; overflow-y: auto; padding-right: 10px; font-size: 13px; line-height: 1.6; color: #334155;">
+        <h4 style="font-weight: 800; color: #0f172a; margin-top: 0;">1. Monthly Rent &amp; Advance Deposit</h4>
+        <p>The standard apartment monthly rent is ₱3,000.00 per unit, due on the designated monthly due date. An initial advance deposit of ₱3,000.00 is required upon tenancy commencement.</p>
+
+        <h4 style="font-weight: 800; color: #0f172a;">2. Maintenance &amp; Repair Policy</h4>
+        <p>All structural, electrical, plumbing, and general wear-and-tear repairs are the sole responsibility of the property owner/admin. Tenants will <strong>not</strong> be billed or charged for submitting maintenance work orders.</p>
+
+        <h4 style="font-weight: 800; color: #0f172a;">3. Resident Verification</h4>
+        <p>Tenants agree to provide valid identification and complete real-time face verification to prevent identity fraud and ensure community safety within TaraRent residences.</p>
+
+        <h4 style="font-weight: 800; color: #0f172a;">4. House Rules &amp; Noise Curfew</h4>
+        <p>Tenants must respect quiet hours between 10:00 PM and 7:00 AM. Cleanliness of common areas must be maintained at all times.</p>
+      </div>
+
+      <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 16px; padding-top: 12px; border-top: 1.5px solid #f1f5f9;">
+        <span style="font-size: 12px; color: #64748b;">TaraRent Management</span>
+        <button type="button" class="clay-btn clay-btn-primary" onclick="agreeTermsFromModal()" style="padding: 8px 20px; font-size: 13px;">
+          <span>I Agree to Terms</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       MODAL: PRIVACY POLICY & BIOMETRIC DATA CONSENT (RA 10173)
+       ===================================================================== -->
+  <div class="modal-backdrop" id="privacyContentModal" style="display: none; z-index: 10050;">
+    <div class="clay-modal" style="max-width: 620px; width: 100%; max-height: 85vh; display: flex; flex-direction: column;">
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1.5px solid #f1f5f9;">
+        <div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <h2 style="font-size: 18px; font-weight: 800; color: #0f172a; margin: 0;">Privacy Policy &amp; Biometric Consent</h2>
+            <span class="clay-badge" style="font-size: 11px; padding: 2px 8px; background: #dcfce7; color: #166534; font-weight: 700;">RA 10173</span>
+          </div>
+          <p style="font-size: 12px; color: var(--text-muted); margin: 3px 0 0 0;">In compliance with Republic Act No. 10173 (Data Privacy Act of 2012)</p>
+        </div>
+        <button type="button" class="btn-remove-file" onclick="closePrivacyModal()" title="Close">✕</button>
+      </div>
+
+      <div style="flex: 1; overflow-y: auto; padding-right: 10px; font-size: 13px; line-height: 1.6; color: #334155;">
+        <h4 style="font-weight: 800; color: #0f172a; margin-top: 0;">1. Data Collection &amp; Purpose</h4>
+        <p>TaraRent collects tenant names, contact details, uploaded government/student ID photos, and real-time live face scan imagery solely for identity verification, residency records, and tenancy contract management.</p>
+
+        <h4 style="font-weight: 800; color: #0f172a;">2. Biometric Data Processing</h4>
+        <p>Your live face scan is used exclusively to compare against your uploaded ID to confirm your identity. Biometric templates are not retained indefinitely, sold, or shared with third parties.</p>
+
+        <h4 style="font-weight: 800; color: #0f172a;">3. Data Security &amp; Confidentiality</h4>
+        <p>All sensitive information, including uploaded IDs and payment proofs, is stored in restricted, secure server directories with role-based access controls and encrypted channels.</p>
+
+        <h4 style="font-weight: 800; color: #0f172a;">4. Tenant Rights</h4>
+        <p>Under RA 10173, you retain the right to access, rectify, or request information regarding your personal data retained within the system by contacting the property administrator.</p>
+      </div>
+
+      <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 16px; padding-top: 12px; border-top: 1.5px solid #f1f5f9;">
+        <span style="font-size: 12px; color: #64748b;">TaraRent Data Privacy Protection</span>
+        <button type="button" class="clay-btn clay-btn-primary" onclick="agreePrivacyFromModal()" style="padding: 8px 20px; font-size: 13px;">
+          <span>I Acknowledge &amp; Consent</span>
+        </button>
+      </div>
     </div>
   </div>
 
@@ -1516,6 +1913,231 @@ foreach ($myPayments as $p) {
       }
     }
 
+    // =========================================================================
+    // PROFILE PICTURE CUSTOMIZATION (TENANT)
+    // =========================================================================
+    let currentSavedAvatarUrl = <?= json_encode(!empty($userAvatarUrl) ? $userAvatarUrl : '') ?>;
+    let userDefaultInitial = <?= json_encode($userInitial) ?>;
+    let pendingAvatarFile = null;
+
+    function handleProfilePictureSelected(e) {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+
+      const validTypes = ['image/jpeg', 'image/png', 'image/webp'];
+      if (!validTypes.includes(file.type)) {
+        showToast('Invalid format. Please choose a JPG, PNG, or WEBP image.', 'error');
+        e.target.value = '';
+        return;
+      }
+
+      if (file.size > 5 * 1024 * 1024) {
+        showToast('Image file exceeds the 5MB size limit.', 'error');
+        e.target.value = '';
+        return;
+      }
+
+      pendingAvatarFile = file;
+
+      const reader = new FileReader();
+      reader.onload = function(evt) {
+        const previewImg = document.getElementById('avatarPreviewImg');
+        const fallbackInit = document.getElementById('avatarFallbackInitial');
+        if (previewImg) {
+          previewImg.src = evt.target.result;
+          previewImg.style.display = 'block';
+        }
+        if (fallbackInit) {
+          fallbackInit.style.display = 'none';
+        }
+        const pendingActions = document.getElementById('avatarPendingActions');
+        if (pendingActions) pendingActions.style.display = 'inline-flex';
+        const removeBtn = document.getElementById('btnRemoveAvatar');
+        if (removeBtn) removeBtn.style.display = 'none';
+        if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function cancelProfilePictureSelection() {
+      pendingAvatarFile = null;
+      const input = document.getElementById('profilePictureInput');
+      if (input) input.value = '';
+
+      const previewImg = document.getElementById('avatarPreviewImg');
+      const fallbackInit = document.getElementById('avatarFallbackInitial');
+      const pendingActions = document.getElementById('avatarPendingActions');
+      const removeBtn = document.getElementById('btnRemoveAvatar');
+
+      if (pendingActions) pendingActions.style.display = 'none';
+
+      if (currentSavedAvatarUrl) {
+        if (previewImg) {
+          previewImg.src = currentSavedAvatarUrl;
+          previewImg.style.display = 'block';
+        }
+        if (fallbackInit) fallbackInit.style.display = 'none';
+        if (removeBtn) removeBtn.style.display = 'inline-flex';
+      } else {
+        if (previewImg) {
+          previewImg.src = '';
+          previewImg.style.display = 'none';
+        }
+        if (fallbackInit) {
+          fallbackInit.textContent = userDefaultInitial;
+          fallbackInit.style.display = 'flex';
+        }
+        if (removeBtn) removeBtn.style.display = 'none';
+      }
+      if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
+    }
+
+    function submitProfilePictureUpload() {
+      if (!pendingAvatarFile) {
+        showToast('Please select a photo first.', 'warning');
+        return;
+      }
+
+      const saveBtn = document.getElementById('btnSaveAvatar');
+      if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.innerHTML = 'Saving...';
+      }
+
+      const formData = new FormData();
+      formData.append('action', 'upload_profile_picture');
+      formData.append('profile_picture', pendingAvatarFile);
+
+      fetch('api/profile_api.php', {
+        method: 'POST',
+        body: formData
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (saveBtn) {
+          saveBtn.disabled = false;
+          saveBtn.innerHTML = '<i data-lucide="check" style="width: 15px; height: 15px;"></i> Save Changes';
+          if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
+        }
+
+        if (data.status === 'success') {
+          currentSavedAvatarUrl = data.profile_picture;
+          pendingAvatarFile = null;
+          const input = document.getElementById('profilePictureInput');
+          if (input) input.value = '';
+
+          const pendingActions = document.getElementById('avatarPendingActions');
+          if (pendingActions) pendingActions.style.display = 'none';
+
+          const removeBtn = document.getElementById('btnRemoveAvatar');
+          if (removeBtn) removeBtn.style.display = 'inline-flex';
+
+          const stamp = Date.now();
+          const avatarUrlWithCache = data.profile_picture + '?t=' + stamp;
+
+          // Update header avatar badge
+          const headerBadge = document.getElementById('headerAvatarBadge');
+          if (headerBadge) {
+            headerBadge.innerHTML = `<img src="${avatarUrlWithCache}" alt="Profile" class="header-avatar-img">`;
+          }
+
+          // Update profile dropdown avatar
+          const dropCircle = document.getElementById('profileDropdownAvatarCircle') || document.querySelector('.fb-profile-avatar-circle');
+          if (dropCircle) {
+            dropCircle.innerHTML = `<img src="${avatarUrlWithCache}" alt="Profile" id="profileDropdownAvatarImg">`;
+          }
+
+          // Update settings preview
+          const previewImg = document.getElementById('avatarPreviewImg');
+          if (previewImg) {
+            previewImg.src = avatarUrlWithCache;
+            previewImg.style.display = 'block';
+          }
+          const fallbackInit = document.getElementById('avatarFallbackInitial');
+          if (fallbackInit) fallbackInit.style.display = 'none';
+
+          if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
+          showToast('Profile picture updated successfully!', 'success');
+        } else {
+          showToast(data.message || 'Failed to update profile picture.', 'error');
+        }
+      })
+      .catch(err => {
+        if (saveBtn) {
+          saveBtn.disabled = false;
+          saveBtn.innerHTML = '<i data-lucide="check" style="width: 15px; height: 15px;"></i> Save Changes';
+          if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
+        }
+        showToast('Network error uploading profile picture.', 'error');
+      });
+    }
+
+    function confirmRemoveProfilePicture() {
+      if (!confirm('Are you sure you want to remove your profile picture and revert to the default circular initial icon?')) {
+        return;
+      }
+
+      const removeBtn = document.getElementById('btnRemoveAvatar');
+      if (removeBtn) removeBtn.disabled = true;
+
+      fetch('api/profile_api.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'remove_profile_picture' })
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (removeBtn) removeBtn.disabled = false;
+
+        if (data.status === 'success') {
+          currentSavedAvatarUrl = '';
+          pendingAvatarFile = null;
+          userDefaultInitial = data.initial || userDefaultInitial;
+
+          const input = document.getElementById('profilePictureInput');
+          if (input) input.value = '';
+
+          const pendingActions = document.getElementById('avatarPendingActions');
+          if (pendingActions) pendingActions.style.display = 'none';
+
+          if (removeBtn) removeBtn.style.display = 'none';
+
+          // Update settings preview
+          const previewImg = document.getElementById('avatarPreviewImg');
+          if (previewImg) {
+            previewImg.src = '';
+            previewImg.style.display = 'none';
+          }
+          const fallbackInit = document.getElementById('avatarFallbackInitial');
+          if (fallbackInit) {
+            fallbackInit.textContent = userDefaultInitial;
+            fallbackInit.style.display = 'flex';
+          }
+
+          // Update header avatar badge
+          const headerBadge = document.getElementById('headerAvatarBadge');
+          if (headerBadge) {
+            headerBadge.innerHTML = `<span class="header-avatar-initial">${escapeHtml(userDefaultInitial)}</span>`;
+          }
+
+          // Update profile dropdown avatar
+          const dropCircle = document.getElementById('profileDropdownAvatarCircle') || document.querySelector('.fb-profile-avatar-circle');
+          if (dropCircle) {
+            dropCircle.innerHTML = `<span id="profileDropdownAvatarInitial">${escapeHtml(userDefaultInitial)}</span>`;
+          }
+
+          if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
+          showToast('Profile picture removed. Reverted to default initial icon.', 'success');
+        } else {
+          showToast(data.message || 'Failed to remove profile picture.', 'error');
+        }
+      })
+      .catch(() => {
+        if (removeBtn) removeBtn.disabled = false;
+        showToast('Network error removing profile picture.', 'error');
+      });
+    }
+
     // Edit Account Information Modal Controls
     function openEditAccountInfoModal() {
       const modal = document.getElementById('editAccountInfoModal');
@@ -1694,6 +2316,50 @@ foreach ($myPayments as $p) {
       reader.readAsDataURL(file);
     }
 
+    function openTermsModal(e) {
+      if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      const m = document.getElementById('termsContentModal');
+      if (m) m.style.display = 'flex';
+    }
+
+    function closeTermsModal() {
+      const m = document.getElementById('termsContentModal');
+      if (m) m.style.display = 'none';
+    }
+
+    function agreeTermsFromModal() {
+      const chk = document.getElementById('checkTermsAgreement');
+      if (chk) chk.checked = true;
+      closeTermsModal();
+    }
+
+    function openPrivacyModal(e) {
+      if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      const m = document.getElementById('privacyContentModal');
+      if (m) m.style.display = 'flex';
+    }
+
+    function closePrivacyModal() {
+      const m = document.getElementById('privacyContentModal');
+      if (m) m.style.display = 'none';
+    }
+
+    function agreePrivacyFromModal() {
+      const chk = document.getElementById('checkPrivacyAgreement');
+      if (chk) chk.checked = true;
+      closePrivacyModal();
+    }
+
+    const hasRegisteredFaceId = <?= !empty($user['id_photo_filename']) ? 'true' : 'false' ?>;
+    const registeredIdType = <?= json_encode($user['id_type'] ?? '') ?>;
+    const registeredIdPhoto = <?= json_encode($user['id_photo_filename'] ?? '') ?>;
+
     function openVerifyAccountModal() {
       const modal = document.getElementById('verifyAccountModal');
       if (modal) {
@@ -1701,7 +2367,23 @@ foreach ($myPayments as $p) {
         modal.classList.add('open');
         modal.style.pointerEvents = 'auto';
       }
-      goToVerificationStep(1);
+      const retryBtn = document.getElementById('btnLivenessRetry');
+      if (retryBtn) retryBtn.style.display = 'none';
+
+      // Pre-select ID type if on file
+      if (registeredIdType) {
+        const idTypeSelect = document.getElementById('idTypeSelect');
+        if (idTypeSelect && !idTypeSelect.value) {
+          idTypeSelect.value = registeredIdType;
+        }
+      }
+
+      // If tenant already has a registered ID / Face ID on file, jump directly to Live Face Scan (Step 2)
+      if (hasRegisteredFaceId) {
+        goToVerificationStep(2);
+      } else {
+        goToVerificationStep(1);
+      }
     }
 
     function removeIdFile(e) {
@@ -1731,18 +2413,18 @@ foreach ($myPayments as $p) {
         modal.style.display = 'none';
         modal.style.pointerEvents = 'none';
       }
-      const f = document.getElementById('verifyAccountForm');
-      if (f) f.reset();
-      removeIdFile();
-      resetLivenessAntiSpoofingState();
-      heldOcrRawText = '';
-      isLivenessConfirmed = false;
+      const retryBtn = document.getElementById('btnLivenessRetry');
+      if (retryBtn) retryBtn.style.display = 'none';
+      const overlay = document.getElementById('livenessFinalizingOverlay');
+      if (overlay) overlay.style.display = 'none';
       const alertBox = document.getElementById('verifyModalAlert');
       if (alertBox) {
         alertBox.style.display = 'none';
         alertBox.innerHTML = '';
       }
-      goToVerificationStep(1);
+      isLivenessConfirmed = false;
+      lastFaceDetected = false;
+      resetLivenessAntiSpoofingState();
     }
 
     function goToVerificationStep(stepNum) {
@@ -1751,6 +2433,8 @@ foreach ($myPayments as $p) {
         alertBox.style.display = 'none';
         alertBox.innerHTML = '';
       }
+      const retryBtn = document.getElementById('btnLivenessRetry');
+      if (retryBtn) retryBtn.style.display = 'none';
 
       const v1 = document.getElementById('verifyStep1View');
       const v2 = document.getElementById('verifyStep2View');
@@ -1781,29 +2465,51 @@ foreach ($myPayments as $p) {
       }
 
       if (stepNum === 2) {
-        // Validate Step 1 first: ID Type and ID Photo must be selected
-        const idTypeEl = document.getElementById('idTypeSelect');
-        const idType = idTypeEl ? idTypeEl.value : '';
+        // If tenant has no registered Face ID yet, validate Step 1 requirements
+        if (!hasRegisteredFaceId) {
+          const idTypeEl = document.getElementById('idTypeSelect');
+          const idType = idTypeEl ? idTypeEl.value : '';
 
-        if (!idType) {
-          showToast('Please select a valid ID type from the dropdown.', 'error');
-          if (alertBox) {
-            alertBox.style.display = 'block';
-            alertBox.innerHTML = '⚠️ Please select a valid ID type before proceeding.';
+          if (!idType) {
+            showToast('Please select a valid ID type from the dropdown.', 'error');
+            if (alertBox) {
+              alertBox.style.display = 'block';
+              alertBox.innerHTML = '⚠️ Please select a valid ID type before proceeding.';
+            }
+            return;
           }
-          return;
+
+          if (!selectedIdFile) {
+            showToast('Please upload or attach a photo of your ID.', 'error');
+            if (alertBox) {
+              alertBox.style.display = 'block';
+              alertBox.innerHTML = '⚠️ Please upload a photo of your ID before proceeding.';
+            }
+            return;
+          }
+
+          const termsCheck = document.getElementById('checkTermsAgreement');
+          if (!termsCheck || !termsCheck.checked) {
+            showToast('Please review and agree to the Terms & Conditions.', 'error');
+            if (alertBox) {
+              alertBox.style.display = 'block';
+              alertBox.innerHTML = '⚠️ You must review and agree to the <strong>Terms &amp; Conditions</strong> to proceed.';
+            }
+            return;
+          }
+
+          const privacyCheck = document.getElementById('checkPrivacyAgreement');
+          if (!privacyCheck || !privacyCheck.checked) {
+            showToast('Please acknowledge the Privacy Policy & Biometric Consent.', 'error');
+            if (alertBox) {
+              alertBox.style.display = 'block';
+              alertBox.innerHTML = '⚠️ You must acknowledge the <strong>Privacy Policy &amp; Biometric Consent</strong> to proceed.';
+            }
+            return;
+          }
         }
 
-        if (!selectedIdFile) {
-          showToast('Please upload or attach a photo of your ID.', 'error');
-          if (alertBox) {
-            alertBox.style.display = 'block';
-            alertBox.innerHTML = '⚠️ Please upload a photo of your ID before proceeding.';
-          }
-          return;
-        }
-
-        // Transition directly to Step 2 (Live Testing Interface)
+        // Transition directly to Step 2 (Live Face Scan)
         currentVerificationStep = 2;
         if (v1) v1.style.display = 'none';
         if (v2) v2.style.display = 'block';
@@ -1811,7 +2517,7 @@ foreach ($myPayments as $p) {
         setPillActive(p1, false);
         setPillActive(p2, true);
 
-        // Start dedicated liveness webcam and facial landmark tracking loop
+        // Start dedicated liveness webcam and real-time scanning
         startLivenessTestingTab();
 
       } else {
@@ -1848,6 +2554,7 @@ foreach ($myPayments as $p) {
     let livenessTrackingTimerId = null;
     let isLivenessTrackingActive = false;
     let isLivenessConfirmed = false;
+    let lastFaceDetected = false;
     let isFaceApiModelsLoaded = false;
     let isModelLoadingInProgress = false;
 
@@ -1920,11 +2627,21 @@ foreach ($myPayments as $p) {
       pauseLivenessTracking();
       resetLivenessAntiSpoofingState();
       isLivenessConfirmed = false;
+      lastFaceDetected = false;
 
       const overlay = document.getElementById('livenessFinalizingOverlay');
       if (overlay) overlay.style.display = 'none';
 
-      updateLivenessStatusBadge('👀', 'Look directly at camera to start', 'normal');
+      const alertBox = document.getElementById('verifyModalAlert');
+      if (alertBox) {
+        alertBox.style.display = 'none';
+        alertBox.innerHTML = '';
+      }
+
+      const retryBtn = document.getElementById('btnLivenessRetry');
+      if (retryBtn) retryBtn.style.display = 'none';
+
+      updateLivenessStatusBadge('📷', 'Position your face in the camera.', 'normal');
 
       const video = document.getElementById('livenessVideo');
       if (!video) return;
@@ -1941,8 +2658,25 @@ foreach ($myPayments as $p) {
           video.srcObject = livenessStream;
         }
         await video.play().catch(() => {});
+        updateLivenessStatusBadge('👀', 'Position your face in the camera.', 'challenge');
       } catch (err) {
         console.warn('Liveness camera access:', err);
+        let userMsg = 'Unable to access camera. Please ensure camera permissions are granted.';
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          userMsg = 'Camera permission denied. Please allow camera access in your browser settings to perform live face verification.';
+        } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+          userMsg = 'No camera device detected. Please connect a camera or use a mobile device.';
+        } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+          userMsg = 'Camera is in use by another application. Please close other camera apps and retry.';
+        }
+        updateLivenessStatusBadge('⚠️', userMsg, 'spoof');
+        if (alertBox) {
+          alertBox.style.display = 'block';
+          alertBox.innerHTML = '⚠️ <strong>Camera Error:</strong> ' + userMsg;
+        }
+        showToast(userMsg, 'error');
+        if (retryBtn) retryBtn.style.display = 'inline-flex';
+        return;
       }
 
       // Preload models
@@ -1951,6 +2685,22 @@ foreach ($myPayments as $p) {
       // Start non-blocking tracking loop (150ms interval)
       isLivenessTrackingActive = true;
       scheduleNextLivenessStep();
+    }
+
+    // Restart scanning after a failed attempt or reset
+    function restartLivenessScan() {
+      const retryBtn = document.getElementById('btnLivenessRetry');
+      if (retryBtn) retryBtn.style.display = 'none';
+
+      const alertBox = document.getElementById('verifyModalAlert');
+      if (alertBox) {
+        alertBox.style.display = 'none';
+        alertBox.innerHTML = '';
+      }
+
+      isLivenessConfirmed = false;
+      resetLivenessAntiSpoofingState();
+      startLivenessTestingTab();
     }
 
     // Pause tracking evaluation loop without cutting the active camera stream
@@ -1962,9 +2712,10 @@ foreach ($myPayments as $p) {
       }
     }
 
-    // Completely stops camera stream and releases webcam hardware on modal exit
+    // Completely stops camera stream and releases webcam hardware on modal exit, failure, or completion
     function stopLivenessCamera() {
       pauseLivenessTracking();
+      lastFaceDetected = false;
       if (livenessStream) {
         try {
           livenessStream.getTracks().forEach(t => t.stop());
@@ -2000,6 +2751,7 @@ foreach ($myPayments as $p) {
      * Pure physical motion detection (Blink or Head Turn) using relaxed thresholds & real-time landmark tracking.
      * Strictly does NOT gatekeep with custom pixel variance, brightness, or blurriness heuristics.
      * Mathematical state machine prevents static photo / phone screen spoofing.
+     * Multi-face check prevents proceeding if more than 1 face is detected.
      */
     async function executeLivenessDetectionStep() {
       if (!isLivenessTrackingActive || isLivenessConfirmed) return;
@@ -2009,35 +2761,52 @@ foreach ($myPayments as $p) {
         return;
       }
 
-      // Optimized Model Configurations: scoreThreshold relaxed to 0.3, inputSize increased to 320 (multiple of 32)
-      // Gives the AI sufficient pixel data to reliably track landmarks under standard indoor lighting without false rejections
-      let detection = null;
+      // Preload models if needed
+      if (!isFaceApiModelsLoaded) {
+        await ensureFaceApiModelsLoaded();
+      }
+
+      // Multi-face detection check: use detectAllFaces to verify only one person is in camera view
+      let detections = [];
       if (typeof faceapi !== 'undefined' && faceapi.nets.tinyFaceDetector && faceapi.nets.tinyFaceDetector.params) {
         try {
           const detectorOptions = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.3 });
-          detection = await faceapi.detectSingleFace(video, detectorOptions).withFaceLandmarks();
+          detections = await faceapi.detectAllFaces(video, detectorOptions).withFaceLandmarks();
         } catch (err) {
           console.warn('faceapi tracking warning:', err);
         }
       }
 
-      // Seamless real-time tracking: Do not display "no face detected" or "image too blurry" errors on the overlay
-      if (!detection || !detection.landmarks) {
-        updateLivenessStatusBadge('👀', 'Look directly at camera to start', 'challenge');
+      // Condition A: If no face is detected
+      if (!detections || detections.length === 0) {
+        lastFaceDetected = false;
+        updateLivenessStatusBadge('👀', 'Position your face in the camera.', 'detecting');
+        resetLivenessAntiSpoofingState();
         return;
       }
 
-      const landmarks = detection.landmarks.positions ||
-        (typeof detection.landmarks.getPositions === 'function' ? detection.landmarks.getPositions() : null);
+      // Condition B: If multiple faces are detected, do not proceed with verification
+      if (detections.length > 1) {
+        lastFaceDetected = false;
+        updateLivenessStatusBadge('⚠️', 'Multiple faces detected. Please ensure only one person is in view.', 'spoof');
+        resetLivenessAntiSpoofingState();
+        return;
+      }
+
+      // Condition C: Exactly 1 face detected
+      const detection = detections[0];
+      const landmarks = detection.landmarks ? (detection.landmarks.positions ||
+        (typeof detection.landmarks.getPositions === 'function' ? detection.landmarks.getPositions() : null)) : null;
 
       if (!landmarks || landmarks.length < 68) {
-        updateLivenessStatusBadge('👀', 'Look directly at camera to start', 'challenge');
+        lastFaceDetected = false;
+        updateLivenessStatusBadge('👀', 'Position your face in the camera.', 'detecting');
+        resetLivenessAntiSpoofingState();
         return;
       }
 
-      // Strict Removal of Custom Gatekeeping:
-      // No custom pixel variance, brightness, or Laplacian blur heuristics are applied to block the test.
-      // As long as the 68 facial landmarks are plotted, the system immediately proceeds to EAR and Yaw tracking.
+      // Face confirmed present and tracked!
+      lastFaceDetected = true;
 
       // 1. Calculate Eye Aspect Ratio (EAR) using 68 landmarks
       // Left eye: 36, 37, 38, 39, 40, 41
@@ -2127,29 +2896,30 @@ foreach ($myPayments as $p) {
       // --- EVALUATION ---
       if (livenessBlinkState === 'COMPLETED' || livenessHeadState === 'COMPLETED') {
         const triggerReason = (livenessBlinkState === 'COMPLETED')
-          ? 'Blink cycle confirmed (open -> closed -> open)'
-          : 'Head turn cycle confirmed (center -> turned -> center)';
+          ? 'Blink cycle confirmed'
+          : 'Head turn cycle confirmed';
         console.log('Liveness motion confirmed:', triggerReason);
 
-        // Pause evaluation tracking loop, keeping the live camera stream active for snapshot
+        // Pause evaluation tracking loop
         pauseLivenessTracking();
 
-        // 1 second of stillness after completing movement to eliminate motion blur and ensure eyes are open
-        updateLivenessStatusBadge('📸', 'Movement verified! Hold still for photo...', 'perfect-capturing');
+        // Update badge to "Liveness detected."
+        updateLivenessStatusBadge('✨', 'Liveness detected.', 'perfect-capturing');
 
+        // Short stabilization pause to ensure eyes are open and face is forward before auto-capture
         setTimeout(async () => {
           await captureAndSubmitLiveVerification(triggerReason);
-        }, 1000);
+        }, 400);
       } else {
-        // Seamless real-time tracking feedback (No "no face detected" or "blurry" errors)
+        // Dynamic real-time guidance
         if (livenessBlinkState === 'DROPPED_CLOSED') {
-          updateLivenessStatusBadge('👀', 'Eyes closed detected! Re-open eyes...', 'challenge');
+          updateLivenessStatusBadge('👀', 'Please blink your eyes.', 'challenge');
         } else if (livenessHeadState === 'TURNED_AWAY') {
-          updateLivenessStatusBadge('🔄', 'Head turn detected! Return to center...', 'challenge');
+          updateLivenessStatusBadge('🔄', 'Turn your head slightly.', 'challenge');
         } else if (livenessBlinkState === 'OPEN_OBSERVED' || livenessHeadState === 'CENTER_OBSERVED') {
-          updateLivenessStatusBadge('👀', 'Blink your eyes or turn your head', 'challenge');
+          updateLivenessStatusBadge('👀', 'Please blink your eyes.', 'challenge');
         } else {
-          updateLivenessStatusBadge('👀', 'Look directly at camera to start', 'challenge');
+          updateLivenessStatusBadge('👤', 'Face detected.', 'challenge');
         }
       }
     }
@@ -2194,18 +2964,20 @@ foreach ($myPayments as $p) {
       const overlay = document.getElementById('livenessFinalizingOverlay');
       const titleEl = document.getElementById('livenessFinalizingTitle');
       const subEl = document.getElementById('livenessFinalizingSub');
+      const spinnerEl = document.getElementById('livenessLoadingSpinner');
       if (overlay) overlay.style.display = 'flex';
-      if (titleEl) titleEl.textContent = (reason || 'Action Confirmed') + '!';
-      if (subEl) subEl.textContent = 'Comparing face with ID document using Face++...';
+      if (spinnerEl) spinnerEl.style.display = 'block';
+      if (titleEl) titleEl.textContent = 'Comparing with registered Face ID...';
+      if (subEl) subEl.textContent = 'Please hold still while we verify your identity.';
 
       const ring = document.getElementById('livenessOvalRing');
       if (ring) ring.className = 'face-oval-ring perfect-capturing';
 
-      updateLivenessStatusBadge('✨', 'Verifying with Face++...', 'perfect-capturing');
+      updateLivenessStatusBadge('⏳', 'Comparing with registered Face ID...', 'perfect-capturing');
 
-      // 4. Prepare payload with auto-captured Base64 string + Step 1 ID photo
+      // 4. Prepare payload with auto-captured Base64 string + registered Face ID
       const idTypeEl = document.getElementById('idTypeSelect');
-      const idType = idTypeEl ? idTypeEl.value : '';
+      const idType = idTypeEl ? idTypeEl.value : (registeredIdType || '');
 
       const formData = new FormData();
       formData.append('action', 'complete_verification');
@@ -2222,8 +2994,10 @@ foreach ($myPayments as $p) {
       if (preprocessedIdBlob) {
         formData.append('id_photo_processed', preprocessedIdBlob, 'proc_id.jpg');
       }
+      formData.append('terms_accepted', '1');
+      formData.append('privacy_acknowledged', '1');
       formData.append('liveness_passed', '1');
-      formData.append('liveness_reason', reason || 'Automated physical movement detection');
+      formData.append('liveness_reason', reason || 'Liveness detected');
 
       try {
         const response = await fetch('verify_face.php', {
@@ -2233,12 +3007,16 @@ foreach ($myPayments as $p) {
         const result = await response.json();
 
         if (response.ok && result.status === 'success') {
-          // Success! Officially marked as verified
-          if (titleEl) titleEl.textContent = 'Verification Successful';
-          if (subEl) subEl.textContent = '';
+          // Release camera immediately upon success
+          stopLivenessCamera();
 
-          showToast('Verification Successful', 'success');
-          showVerificationAlert(true, 'Verification Successful');
+          if (spinnerEl) spinnerEl.style.display = 'none';
+          if (titleEl) titleEl.textContent = 'Face verification successful!';
+          if (subEl) subEl.textContent = 'Account is now officially verified.';
+
+          updateLivenessStatusBadge('✅', 'Face verification successful!', 'perfect-capturing');
+          showToast('Face verification successful!', 'success');
+          showVerificationAlert(true, 'Face verification successful!');
 
           // Update badges in UI immediately
           const statusBadge = document.getElementById('accountVerificationStatusBadge');
@@ -2254,7 +3032,10 @@ foreach ($myPayments as $p) {
             window.location.href = 'tenant_portal.php?section=tenantProfile&tab=accountInfo';
           }, 1500);
         } else {
-          const errMsg = result.message || 'Face scan does not match the ID photo.';
+          // Stop webcam on failure as requested
+          stopLivenessCamera();
+
+          const errMsg = result.message || 'Face verification failed. Please try again.';
           showToast(errMsg, 'error');
           if (overlay) overlay.style.display = 'none';
 
@@ -2263,21 +3044,18 @@ foreach ($myPayments as $p) {
             alertBox.style.display = 'block';
             alertBox.innerHTML = '⚠️ <strong>Verification Failed:</strong> ' + errMsg;
           }
-          // Do not display "no face detected" or "image too blurry" errors on the camera overlay
-          const overlayErrMsg = (errMsg.toLowerCase().includes('blurry') || errMsg.toLowerCase().includes('not detected'))
-            ? 'Verification mismatch. Retrying...'
-            : errMsg;
-          updateLivenessStatusBadge('❌', overlayErrMsg, 'spoof');
 
-          setTimeout(() => {
-            isLivenessConfirmed = false;
-            resetLivenessAntiSpoofingState();
-            startLivenessTestingTab();
-          }, 2500);
+          updateLivenessStatusBadge('❌', 'Face verification failed. Please try again.', 'spoof');
+
+          // Show retry button
+          const retryBtn = document.getElementById('btnLivenessRetry');
+          if (retryBtn) retryBtn.style.display = 'inline-flex';
         }
       } catch (err) {
         console.error('Finalize verification error:', err);
-        const errMsg = 'Connection error during verification. Please try again.';
+        stopLivenessCamera();
+
+        const errMsg = 'Face verification failed. Please try again.';
         showToast(errMsg, 'error');
         if (overlay) overlay.style.display = 'none';
 
@@ -2286,17 +3064,11 @@ foreach ($myPayments as $p) {
           alertBox.style.display = 'block';
           alertBox.innerHTML = '⚠️ <strong>Verification Failed:</strong> ' + errMsg;
         }
-        // Do not display "no face detected" or "image too blurry" errors on the camera overlay
-        const overlayCatchMsg = (errMsg.toLowerCase().includes('blurry') || errMsg.toLowerCase().includes('not detected'))
-          ? 'Verification mismatch. Retrying...'
-          : errMsg;
-        updateLivenessStatusBadge('❌', overlayCatchMsg, 'spoof');
 
-        setTimeout(() => {
-          isLivenessConfirmed = false;
-          resetLivenessAntiSpoofingState();
-          startLivenessTestingTab();
-        }, 2500);
+        updateLivenessStatusBadge('❌', 'Face verification failed. Please try again.', 'spoof');
+
+        const retryBtn = document.getElementById('btnLivenessRetry');
+        if (retryBtn) retryBtn.style.display = 'inline-flex';
       }
     }
 
@@ -2312,9 +3084,14 @@ foreach ($myPayments as $p) {
       const textEl = document.getElementById('livenessStatusText');
       const pill = document.getElementById('livenessStatusPill');
       const ring = document.getElementById('livenessOvalRing');
+      const challengeEl = document.getElementById('livenessChallengeText');
+      const challengeIconEl = document.getElementById('livenessInstructionIconBox');
 
       if (iconEl) iconEl.textContent = icon;
       if (textEl) textEl.textContent = text;
+      if (challengeEl) challengeEl.textContent = text;
+      if (challengeIconEl && icon) challengeIconEl.textContent = icon;
+
       if (pill) {
         pill.className = 'face-status-pill';
         if (mode === 'liveness') pill.classList.add('status-liveness');
@@ -2322,9 +3099,14 @@ foreach ($myPayments as $p) {
         else if (mode === 'spoof') pill.classList.add('status-spoof');
       }
       if (ring) {
-        ring.className = 'face-oval-ring ' + mode;
+        ring.className = 'face-oval-ring ' + (mode || 'normal');
       }
     }
+
+    // Stop webcam hardware if the user navigates away or unloads the page
+    window.addEventListener('beforeunload', () => {
+      stopLivenessCamera();
+    });
 
     // Testing and simulation helpers
     window.euclideanDistance = euclideanDistance;
@@ -2335,6 +3117,8 @@ foreach ($myPayments as $p) {
     window.completeLivenessVerification = captureAndSubmitLiveVerification;
     window.captureAndSubmitLiveVerification = captureAndSubmitLiveVerification;
     window.triggerManualLivenessAction = triggerManualLivenessAction;
+    window.restartLivenessScan = restartLivenessScan;
+    window.stopLivenessCamera = stopLivenessCamera;
 
     window.__simulateTenantFaceMatch = function(confidence) {
       console.log('Simulating tenant face match with confidence:', confidence || 88.5);
@@ -2754,8 +3538,9 @@ foreach ($myPayments as $p) {
 
       const statusEl = document.getElementById('ttModalStatus');
       if (statusEl) {
-        statusEl.textContent = String(tk.status || 'open').toUpperCase();
-        statusEl.className = 'clay-badge badge-' + String(tk.status || 'open').toLowerCase();
+        const s = tk.status || 'Pending';
+        statusEl.textContent = s;
+        statusEl.className = 'clay-badge ' + (s === 'Done' ? 'badge-done' : (s === 'On-Going' ? 'badge-ongoing' : 'badge-pending'));
       }
 
       const unitEl = document.getElementById('ttModalUnit');
@@ -2966,6 +3751,19 @@ foreach ($myPayments as $p) {
         }
       } catch (e) {
         console.warn('ID dropzone listener notice:', e);
+      }
+
+      // 3.5 Verify Account Form Submission (Routes to Step 2: Live Face Scan)
+      try {
+        const verifyForm = document.getElementById('verifyAccountForm');
+        if (verifyForm) {
+          verifyForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            goToVerificationStep(2);
+          });
+        }
+      } catch (e) {
+        console.warn('Verify form listener notice:', e);
       }
 
       // 4. Change Password Form Submission
@@ -3341,6 +4139,15 @@ foreach ($myPayments as $p) {
         switchTenantSection(targetSec, targetBtn, false);
       }
     }
+
+    // Stop live camera immediately when user navigates away or switches tabs/apps
+    window.addEventListener('beforeunload', stopLivenessCamera);
+    window.addEventListener('pagehide', stopLivenessCamera);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        stopLivenessCamera();
+      }
+    });
 
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', initTenantEventListeners);

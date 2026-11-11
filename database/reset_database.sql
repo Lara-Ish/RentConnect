@@ -25,7 +25,7 @@ SET FOREIGN_KEY_CHECKS = 1;
 --     `id`, `unit_id`, `username`, `name`, `email`, `password_hash`, `role`, 
 --     `phone`, `birthday`, `emergency_contact`, `move_in_date`, `is_active`, `created_at`
 -- ) VALUES (
---     1, NULL, 'admin', 'Lead Dimaculangan', 'lead.dimaculangan@rentconnect.ph', 
+--     1, NULL, 'admin', 'Lead Dimaculangan', 'rentconnect2026@gmail.com', 
 --     '$2y$10$L1oJw/e9iaOxHBBWA6p0G.EEPbgJ8jKQxXLEnjzxwY0DSzno7igyO', 'landlord', 
 --     '+63 917 123 4567', '1985-11-20', 'Property Management Office', '2024-01-01', 1, NOW()
 -- );

@@ -13,6 +13,7 @@ header('Content-Type: application/json; charset=UTF-8');
 require_once __DIR__ . '/../config/auth.php';
 require_once __DIR__ . '/../includes/notification_service.php';
 require_once __DIR__ . '/../includes/email_service.php';
+require_once __DIR__ . '/../includes/tenant_service.php';
 
 $requestMethod = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
@@ -35,14 +36,182 @@ $pdo = Database::getConnection();
 
 try {
     // -------------------------------------------------------------------------
-    // 1. GET: Fetch Tenants Grouped by the 3 Units
+    // 1. GET: Fetch Tenants Grouped by the 3 Units OR Fetch Archived Tenants
     // -------------------------------------------------------------------------
     if ($requestMethod === 'GET') {
+        $action = trim((string)($_GET['action'] ?? 'list_active'));
+
+        // ACTION: Check Tenant Settlement Status (Move-Out Audit)
+        if ($action === 'check_settlement') {
+            $tId = (int)($_GET['tenant_id'] ?? 0);
+            if ($tId <= 0) {
+                http_response_code(422);
+                echo json_encode(['status' => 'error', 'message' => 'Invalid tenant ID.']);
+                exit;
+            }
+            $tStmt = $pdo->prepare("SELECT id, name, unit_id, rental_status, is_active, is_archived FROM users WHERE id = :id AND role = 'tenant' LIMIT 1");
+            $tStmt->execute([':id' => $tId]);
+            $tenant = $tStmt->fetch(PDO::FETCH_ASSOC);
+            if (!$tenant) {
+                http_response_code(404);
+                echo json_encode(['status' => 'error', 'message' => 'Tenant not found.']);
+                exit;
+            }
+            $settlement = TenantService::checkTenantSettlement($pdo, $tId);
+            echo json_encode([
+                'status'        => 'success',
+                'tenant_id'     => $tId,
+                'tenant_name'   => $tenant['name'],
+                'rental_status' => $tenant['rental_status'] ?? 'active',
+                'is_active'     => (int)$tenant['is_active'],
+                'is_archived'   => (int)$tenant['is_archived'],
+                'settlement'    => $settlement
+            ]);
+            exit;
+        }
+
+        // ACTION: List Archived Tenants with Search & Financial Summary
+        if ($action === 'list_archived') {
+            $search = trim((string)($_GET['search'] ?? ''));
+            $params = [];
+            $whereClause = "u.role = 'tenant' AND (u.is_archived = 1 OR u.deleted_at IS NOT NULL)";
+
+            if (!empty($search)) {
+                $whereClause .= " AND (u.name LIKE :s1 OR u.email LIKE :s2 OR u.username LIKE :s3 OR u.archived_unit_number LIKE :s4)";
+                $searchWild = "%{$search}%";
+                $params[':s1'] = $searchWild;
+                $params[':s2'] = $searchWild;
+                $params[':s3'] = $searchWild;
+                $params[':s4'] = $searchWild;
+            }
+
+            $stmt = $pdo->prepare("
+                SELECT u.id, u.name, u.username, u.email, u.phone, u.birthday, 
+                       u.archived_unit_number, u.archived_monthly_rent, u.archived_spaces_text,
+                       u.move_in_date, u.deleted_at, u.created_at, u.profile_picture,
+                       (SELECT COUNT(*) FROM payments WHERE tenant_id = u.id) AS total_payments,
+                       (SELECT COUNT(*) FROM maintenance_tickets WHERE tenant_id = u.id) AS total_tickets,
+                       (SELECT COALESCE(SUM(amount_paid), 0) FROM payments WHERE tenant_id = u.id AND status = 'approved') AS total_paid
+                FROM users u
+                WHERE {$whereClause}
+                ORDER BY u.deleted_at DESC, u.id DESC
+            ");
+            $stmt->execute($params);
+            $archivedTenants = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            foreach ($archivedTenants as &$at) {
+                $at['formatted_deleted_at'] = !empty($at['deleted_at']) ? date('M j, Y g:i A', strtotime($at['deleted_at'])) : 'Archived';
+                $at['formatted_move_in'] = !empty($at['move_in_date']) ? date('M j, Y', strtotime($at['move_in_date'])) : 'Not set';
+                $at['total_paid_formatted'] = '₱' . number_format((float)$at['total_paid'], 2);
+                $at['initial'] = strtoupper(mb_substr(trim(explode(' ', trim($at['name']))[0]), 0, 1, 'UTF-8')) ?: 'T';
+            }
+
+            echo json_encode([
+                'status' => 'success',
+                'count' => count($archivedTenants),
+                'archived_tenants' => $archivedTenants
+            ]);
+            exit;
+        }
+
+        // ACTION: Get Archived Tenant Complete Details (Profile, Ledger, Tickets, Acknowledgments)
+        if ($action === 'get_archived_tenant_details') {
+            $tId = (int)($_GET['tenant_id'] ?? 0);
+            if ($tId <= 0) {
+                http_response_code(422);
+                echo json_encode(['status' => 'error', 'message' => 'Invalid tenant ID.']);
+                exit;
+            }
+
+            // 1. Profile information
+            $stmt = $pdo->prepare("
+                SELECT u.id, u.name, u.username, u.email, u.phone, u.birthday,
+                       u.emergency_contact, u.emergency_contact_name, u.emergency_contact_relationship, u.emergency_contact_phone,
+                       u.archived_unit_number, u.archived_monthly_rent, u.archived_spaces_text,
+                       u.move_in_date, u.total_occupants, u.adults_count, u.kids_count,
+                       u.id_type, u.id_photo_filename, u.profile_picture,
+                       u.verification_status, u.id_submitted_at, u.id_verified_at,
+                       u.deleted_at, u.created_at,
+                       (SELECT address FROM apartment_settings LIMIT 1) AS property_address,
+                       (SELECT security_deposit FROM apartment_settings LIMIT 1) AS standard_deposit
+                FROM users u
+                WHERE u.id = :id AND u.role = 'tenant'
+                LIMIT 1
+            ");
+            $stmt->execute([':id' => $tId]);
+            $tenant = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$tenant) {
+                http_response_code(404);
+                echo json_encode(['status' => 'error', 'message' => 'Archived tenant account not found.']);
+                exit;
+            }
+
+            $tenant['formatted_deleted_at'] = !empty($tenant['deleted_at']) ? date('M j, Y g:i A', strtotime($tenant['deleted_at'])) : 'Archived';
+            $tenant['formatted_move_in'] = !empty($tenant['move_in_date']) ? date('M j, Y', strtotime($tenant['move_in_date'])) : 'Not recorded';
+            $tenant['initial'] = strtoupper(mb_substr(trim(explode(' ', trim($tenant['name']))[0]), 0, 1, 'UTF-8')) ?: 'T';
+
+            $propAddress = $tenant['property_address'] ?: '742 Evergreen Boulevard, Portland, OR 97201';
+            $unitPrefix = !empty($tenant['archived_unit_number']) ? ($tenant['archived_unit_number'] . ', ') : '';
+            $tenant['complete_address'] = $unitPrefix . 'TaraRent Residences, ' . $propAddress;
+            $tenant['formatted_birthday'] = !empty($tenant['birthday']) ? date('M j, Y', strtotime($tenant['birthday'])) : 'Not provided';
+            $tenant['formatted_created_at'] = !empty($tenant['created_at']) ? date('M j, Y', strtotime($tenant['created_at'])) : 'N/A';
+            $depositAmount = (float)($tenant['archived_monthly_rent'] ?: ($tenant['standard_deposit'] ?: 3000.00));
+            $tenant['advance_deposit_formatted'] = '₱' . number_format($depositAmount, 2);
+            $tenant['archived_monthly_rent_formatted'] = '₱' . number_format((float)($tenant['archived_monthly_rent'] ?: 3000.00), 2) . ' / mo';
+
+            // 2. Payments & Billing History (Paid, Unpaid, Overdue, Pending)
+            $pStmt = $pdo->prepare("
+                SELECT id, payment_type, billing_cycle, due_date, base_rent_amount, 
+                       additional_space_fee, additional_spaces_breakdown,
+                       amount_due, amount_paid, payment_date, status, payment_method, 
+                       receipt_filename, verified_by_landlord, verification_notes, verified_at, created_at
+                FROM payments
+                WHERE tenant_id = :id
+                ORDER BY billing_cycle DESC, id DESC
+            ");
+            $pStmt->execute([':id' => $tId]);
+            $payments = $pStmt->fetchAll(PDO::FETCH_ASSOC);
+
+            foreach ($payments as &$p) {
+                $p['billing_cycle_formatted'] = !empty($p['billing_cycle']) ? date('F Y', strtotime($p['billing_cycle'])) : 'Billing Cycle';
+                $p['due_date_formatted'] = !empty($p['due_date']) ? date('M j, Y', strtotime($p['due_date'])) : 'N/A';
+                $p['payment_date_formatted'] = !empty($p['payment_date']) ? date('M j, Y', strtotime($p['payment_date'])) : 'Pending';
+                $p['amount_due_formatted'] = '₱' . number_format((float)$p['amount_due'], 2);
+                $p['amount_paid_formatted'] = '₱' . number_format((float)$p['amount_paid'], 2);
+            }
+
+            // 3. Maintenance Tickets & Responses
+            $tStmt = $pdo->prepare("
+                SELECT id, title, description, photo_path, category, priority, status, 
+                       actual_cost, resolution_notes, created_at, resolved_at
+                FROM maintenance_tickets
+                WHERE tenant_id = :id
+                ORDER BY created_at DESC, id DESC
+            ");
+            $tStmt->execute([':id' => $tId]);
+            $tickets = $tStmt->fetchAll(PDO::FETCH_ASSOC);
+
+            foreach ($tickets as &$tk) {
+                $tk['formatted_date'] = date('M j, Y g:i A', strtotime($tk['created_at']));
+                $tk['actual_cost_formatted'] = '₱' . number_format((float)$tk['actual_cost'], 2);
+            }
+
+            echo json_encode([
+                'status' => 'success',
+                'tenant' => $tenant,
+                'payments' => $payments,
+                'tickets' => $tickets
+            ]);
+            exit;
+        }
+
+        // DEFAULT ACTION: Fetch Active Tenants Grouped by Units
         // Fetch 3 Units
         $unitsStmt = $pdo->query("SELECT * FROM units ORDER BY unit_number ASC");
         $units = $unitsStmt->fetchAll();
 
-        // Fetch All Active Tenants with personal details & emergency contacts
+        // Fetch All Active Tenants with personal details & emergency contacts (strictly excluding archived)
         $tenantsStmt = $pdo->query("
             SELECT u.id, u.unit_id, u.username, u.name, u.email, u.phone, 
                    u.verification_status, u.id_type, u.id_photo_filename,
@@ -52,7 +221,10 @@ try {
                    un.unit_number, un.monthly_rent
             FROM users u
             JOIN units un ON u.unit_id = un.id
-            WHERE u.role = 'tenant' AND u.is_active = 1
+            WHERE u.role = 'tenant' 
+              AND u.is_active = 1 
+              AND (u.is_archived = 0 OR u.is_archived IS NULL)
+              AND u.deleted_at IS NULL
             ORDER BY un.unit_number ASC, u.name ASC
         ");
         $allTenants = $tenantsStmt->fetchAll();
@@ -96,11 +268,16 @@ try {
 
         $occupiedUnitIds = array_keys(array_filter($grouped, fn($u) => !empty($u['tenants'])));
 
+        // Fetch Additional Rental Spaces (Space 1 & Space 2)
+        $spacesStmt = $pdo->query("SELECT id, space_number, space_name, monthly_fee, status, assigned_tenant_id FROM additional_spaces ORDER BY space_number ASC");
+        $additionalSpacesList = $spacesStmt->fetchAll(PDO::FETCH_ASSOC);
+
         echo json_encode([
             'status' => 'success',
             'total_tenants' => count($allTenants),
             'occupied_unit_ids' => $occupiedUnitIds,
-            'units' => array_values($grouped)
+            'units' => array_values($grouped),
+            'additional_spaces' => $additionalSpacesList
         ]);
         exit;
     }
@@ -112,8 +289,8 @@ try {
         $input = json_decode(file_get_contents('php://input'), true) ?? $_POST;
         $action = trim((string)($input['action'] ?? 'create'));
 
-        // DELETE ACTION (Tenant Moved Out / Account Deletion)
-        if ($action === 'delete') {
+        // DELETE / MOVE-OUT ACTION (Automatic Archival of Fully-Settled Moved-Out Tenants)
+        if ($action === 'delete' || $action === 'mark_moved_out' || $action === 'archive') {
             $tenantId = (int)($input['tenant_id'] ?? 0);
 
             if ($tenantId <= 0) {
@@ -130,72 +307,199 @@ try {
                 exit;
             }
 
-            $pdo->beginTransaction();
+            $result = TenantService::markMovedOut($pdo, $tenantId);
 
-            // Verify target user is an existing active tenant
-            $check = $pdo->prepare("SELECT id, name, role, unit_id, is_active FROM users WHERE id = :id FOR UPDATE");
-            $check->execute([':id' => $tenantId]);
-            $target = $check->fetch();
-
-            if (!$target || $target['role'] !== 'tenant' || (int)$target['is_active'] !== 1) {
-                $pdo->rollBack();
+            if ($result['status'] === 'error') {
                 http_response_code(404);
-                echo json_encode(['status' => 'error', 'message' => 'Tenant account not found or has already been deleted.']);
+                echo json_encode($result);
                 exit;
             }
 
-            $unitId = (int)($target['unit_id'] ?? 0);
+            echo json_encode($result);
+            exit;
+        }
 
-            // 1. Clean up transient user records
-            $pdo->prepare("DELETE FROM password_resets WHERE user_id = :id")->execute([':id' => $tenantId]);
-            $pdo->prepare("DELETE FROM notifications WHERE user_id = :id")->execute([':id' => $tenantId]);
-            $pdo->prepare("DELETE FROM announcement_recipients WHERE tenant_id = :id")->execute([':id' => $tenantId]);
-            $pdo->prepare("UPDATE apartment_settings SET active_tenant_id = NULL WHERE active_tenant_id = :id")->execute([':id' => $tenantId]);
+        // RESTORE TENANT ACCOUNT ACTION (Restores archived tenant to active list)
+        if ($action === 'restore') {
+            $tenantId = (int)($input['tenant_id'] ?? 0);
+            if ($tenantId <= 0) {
+                http_response_code(422);
+                echo json_encode(['status' => 'error', 'message' => 'Invalid tenant ID.']);
+                exit;
+            }
 
-            // 2. Remove unconfigured placeholder payments (rent records created upon tenant registration that were never configured)
-            $pdo->prepare("DELETE FROM payments WHERE tenant_id = :id AND status = 'pending_setup'")->execute([':id' => $tenantId]);
+            $pdo->beginTransaction();
+            try {
+                // Fetch target archived tenant
+                $check = $pdo->prepare("
+                    SELECT id, name, email, archived_unit_number, archived_monthly_rent, is_archived, deleted_at 
+                    FROM users 
+                    WHERE id = :id AND role = 'tenant'
+                    FOR UPDATE
+                ");
+                $check->execute([':id' => $tenantId]);
+                $target = $check->fetch(PDO::FETCH_ASSOC);
 
-            // 3. Inspect audit trail: check for historical payments or maintenance tickets that must remain available for administrative audit
-            $auditStmt = $pdo->prepare("
-                SELECT 
-                    (SELECT COUNT(*) FROM payments WHERE tenant_id = :id) AS pay_count,
-                    (SELECT COUNT(*) FROM maintenance_tickets WHERE tenant_id = :id2) AS ticket_count
-            ");
-            $auditStmt->execute([':id' => $tenantId, ':id2' => $tenantId]);
-            $auditCounts = $auditStmt->fetch();
-            $hasAuditRecords = ((int)$auditCounts['pay_count'] > 0 || (int)$auditCounts['ticket_count'] > 0);
+                if (!$target || ((int)($target['is_archived'] ?? 0) !== 1 && empty($target['deleted_at']))) {
+                    $pdo->rollBack();
+                    http_response_code(400);
+                    echo json_encode(['status' => 'error', 'message' => 'This account is not archived or is already active.']);
+                    exit;
+                }
 
-            if ($hasAuditRecords) {
-                // Soft-delete / deactivate tenant account:
-                // Scrambles credentials, frees unit, retains ledger records for landlord audit
+                // Resolve target unit from archived_unit_number or default to available unit
+                $targetUnitNum = trim((string)($target['archived_unit_number'] ?? ''));
+                $targetUnit = null;
+                if (!empty($targetUnitNum)) {
+                    $uStmt = $pdo->prepare("SELECT id, unit_number, monthly_rent FROM units WHERE unit_number = :unum LIMIT 1");
+                    $uStmt->execute([':unum' => $targetUnitNum]);
+                    $targetUnit = $uStmt->fetch(PDO::FETCH_ASSOC);
+                }
+
+                if (!$targetUnit) {
+                    // Try to find any available unit
+                    $availStmt = $pdo->query("
+                        SELECT u.id, u.unit_number, u.monthly_rent 
+                        FROM units u 
+                        WHERE u.id NOT IN (
+                            SELECT unit_id FROM users WHERE role = 'tenant' AND is_active = 1 AND unit_id IS NOT NULL
+                        )
+                        ORDER BY u.id ASC 
+                        LIMIT 1
+                    ");
+                    $targetUnit = $availStmt->fetch(PDO::FETCH_ASSOC);
+                }
+
+                if (!$targetUnit) {
+                    $pdo->rollBack();
+                    http_response_code(409);
+                    echo json_encode([
+                        'status' => 'error',
+                        'message' => 'Cannot restore account: All units are currently occupied. Please make a unit available first.'
+                    ]);
+                    exit;
+                }
+
+                $targetUnitId = (int)$targetUnit['id'];
+
+                // Check that the tenant's assigned unit is available before restoring
+                // Prevent duplicate active accounts for the same unit
+                $chkOcc = $pdo->prepare("
+                    SELECT id, name FROM users 
+                    WHERE unit_id = :uid AND role = 'tenant' AND is_active = 1 AND id != :tid 
+                    LIMIT 1 
+                    FOR UPDATE
+                ");
+                $chkOcc->execute([':uid' => $targetUnitId, ':tid' => $tenantId]);
+                $occupant = $chkOcc->fetch(PDO::FETCH_ASSOC);
+
+                if ($occupant) {
+                    $pdo->rollBack();
+                    http_response_code(409);
+                    echo json_encode([
+                        'status' => 'error',
+                        'message' => "Cannot restore account: {$targetUnit['unit_number']} is currently occupied by active tenant '{$occupant['name']}'. Only one active tenant is allowed per unit."
+                    ]);
+                    exit;
+                }
+
+                // Restore account: set is_active = 1, is_archived = 0, deleted_at = NULL, unit_id = $targetUnitId
                 $upd = $pdo->prepare("
                     UPDATE users 
-                    SET is_active = 0,
-                        unit_id = NULL,
-                        email = CONCAT(email, '.deleted.', UNIX_TIMESTAMP()),
-                        password_hash = 'DEACTIVATED_ACCOUNT',
-                        verification_status = 'unverified',
-                        id_photo_filename = NULL,
-                        live_photo_filename = NULL,
+                    SET is_active = 1,
+                        is_archived = 0,
+                        deleted_at = NULL,
+                        unit_id = :uid,
+                        active_tenant_unit_id = :uid,
+                        active_tenant_email = email,
                         updated_at = NOW()
                     WHERE id = :id
                 ");
-                $upd->execute([':id' => $tenantId]);
-            } else {
-                // Safe to physically delete if no financial or maintenance audit records exist
-                $del = $pdo->prepare("DELETE FROM users WHERE id = :id");
-                $del->execute([':id' => $tenantId]);
+                $upd->execute([
+                    ':uid' => $targetUnitId,
+                    ':id' => $tenantId
+                ]);
+
+                // Update apartment_settings if applicable
+                $pdo->prepare("UPDATE apartment_settings SET active_tenant_id = :id WHERE id = 1 AND (active_tenant_id IS NULL OR active_tenant_id = :id2)")
+                    ->execute([':id' => $tenantId, ':id2' => $tenantId]);
+
+                $pdo->commit();
+
+                echo json_encode([
+                    'status' => 'success',
+                    'message' => "Tenant account '{$target['name']}' has been successfully restored to {$targetUnit['unit_number']}.",
+                    'unit_id' => $targetUnitId,
+                    'tenant_id' => $tenantId
+                ]);
+                exit;
+
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                http_response_code(500);
+                echo json_encode([
+                    'status' => 'error',
+                    'message' => 'Restoration failed: ' . $e->getMessage()
+                ]);
+                exit;
+            }
+        }
+
+        // PERMANENT DELETE ACTION (Permanent Removal with Explicit Confirmation)
+        if ($action === 'permanent_delete') {
+            $tenantId = (int)($input['tenant_id'] ?? 0);
+            if ($tenantId <= 0) {
+                http_response_code(422);
+                echo json_encode(['status' => 'error', 'message' => 'Invalid tenant ID.']);
+                exit;
             }
 
-            $pdo->commit();
+            $pdo->beginTransaction();
+            try {
+                $check = $pdo->prepare("
+                    SELECT id, name, role, is_archived, deleted_at 
+                    FROM users 
+                    WHERE id = :id AND role = 'tenant'
+                    FOR UPDATE
+                ");
+                $check->execute([':id' => $tenantId]);
+                $target = $check->fetch(PDO::FETCH_ASSOC);
 
-            echo json_encode([
-                'status' => 'success',
-                'unit_id' => $unitId,
-                'tenant_id' => $tenantId,
-                'message' => "Tenant account for '{$target['name']}' has been deleted successfully."
-            ]);
-            exit;
+                if (!$target || ((int)($target['is_archived'] ?? 0) !== 1 && empty($target['deleted_at']))) {
+                    $pdo->rollBack();
+                    http_response_code(400);
+                    echo json_encode(['status' => 'error', 'message' => 'Only archived tenant accounts can be permanently deleted.']);
+                    exit;
+                }
+
+                // Delete dependent non-financial items
+                $pdo->prepare("DELETE FROM notifications WHERE user_id = :id")->execute([':id' => $tenantId]);
+                $pdo->prepare("DELETE FROM password_resets WHERE user_id = :id")->execute([':id' => $tenantId]);
+                $pdo->prepare("DELETE FROM maintenance_tickets WHERE tenant_id = :id")->execute([':id' => $tenantId]);
+                $pdo->prepare("DELETE FROM payments WHERE tenant_id = :id")->execute([':id' => $tenantId]);
+                $pdo->prepare("DELETE FROM users WHERE id = :id")->execute([':id' => $tenantId]);
+
+                $pdo->commit();
+
+                echo json_encode([
+                    'status' => 'success',
+                    'message' => "Archived tenant account '{$target['name']}' and associated records have been permanently deleted."
+                ]);
+                exit;
+
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                http_response_code(500);
+                echo json_encode([
+                    'status' => 'error',
+                    'message' => 'Permanent deletion failed: ' . $e->getMessage()
+                ]);
+                exit;
+            }
         }
 
         // VERIFY TENANT ID ACTION (Landlord Approves or Rejects Tenant ID)
@@ -360,6 +664,33 @@ try {
                 }
             }
 
+            // Check email uniqueness strictly against OTHER active tenant accounts
+            if (!empty($tEmail)) {
+                if (!filter_var($tEmail, FILTER_VALIDATE_EMAIL)) {
+                    http_response_code(422);
+                    echo json_encode(['status' => 'error', 'message' => 'Please provide a valid email address.']);
+                    exit;
+                }
+                $dupCheck = $pdo->prepare("
+                    SELECT id FROM users 
+                    WHERE email = :e 
+                      AND id != :id 
+                      AND role = 'tenant' 
+                      AND is_active = 1 
+                      AND (is_archived = 0 OR is_archived IS NULL)
+                    LIMIT 1
+                ");
+                $dupCheck->execute([':e' => $tEmail, ':id' => $tenantId]);
+                if ($dupCheck->fetch()) {
+                    http_response_code(409);
+                    echo json_encode([
+                        'status' => 'error',
+                        'message' => 'This email address is already associated with an active tenant account.'
+                    ]);
+                    exit;
+                }
+            }
+
             $upd = $pdo->prepare("
                 UPDATE users 
                 SET name = COALESCE(NULLIF(:name, ''), name),
@@ -492,15 +823,44 @@ try {
                 exit;
             }
 
-            // Check uniqueness of email
-            $dupStmt = $pdo->prepare("SELECT id FROM users WHERE email = :e LIMIT 1");
+            // Check uniqueness of email strictly against active tenant accounts
+            // Inactive, archived, or deleted tenant accounts do not block email reuse
+            $dupStmt = $pdo->prepare("
+                SELECT id FROM users 
+                WHERE email = :e 
+                  AND role = 'tenant' 
+                  AND is_active = 1 
+                  AND (is_archived = 0 OR is_archived IS NULL)
+                LIMIT 1 
+                FOR UPDATE
+            ");
             $dupStmt->execute([':e' => $email]);
             if ($dupStmt->fetch()) {
                 $pdo->rollBack();
                 http_response_code(409);
                 echo json_encode([
                     'status' => 'error',
-                    'message' => 'A user with this email address already exists.'
+                    'message' => 'This email address is already associated with an active tenant account.'
+                ]);
+                exit;
+            }
+
+            // Also prevent using an active administrator/landlord email address
+            $adminCheckStmt = $pdo->prepare("
+                SELECT id FROM users 
+                WHERE email = :e 
+                  AND role = 'landlord' 
+                  AND is_active = 1
+                LIMIT 1 
+                FOR UPDATE
+            ");
+            $adminCheckStmt->execute([':e' => $email]);
+            if ($adminCheckStmt->fetch()) {
+                $pdo->rollBack();
+                http_response_code(409);
+                echo json_encode([
+                    'status' => 'error',
+                    'message' => 'This email address is already associated with an active administrator account.'
                 ]);
                 exit;
             }
@@ -637,19 +997,87 @@ try {
                 $advanceDepositId = (int)$existingDeposit['id'];
             }
 
-            // 2. Monthly Rent Bill (₱3,000.00, Unpaid, Recurring)
+            // -----------------------------------------------------------------
+            // PROCESS ADDITIONAL RENTAL SPACE SELECTIONS (Optional)
+            // Space 1 & Space 2 (₱1,500.00/month each)
+            // -----------------------------------------------------------------
+            $selectedSpaceIds = $input['additional_space_ids'] ?? $input['additional_spaces'] ?? [];
+            if (!is_array($selectedSpaceIds)) {
+                $selectedSpaceIds = [];
+            }
+            $selectedSpaceIds = array_values(array_unique(array_filter(array_map('intval', $selectedSpaceIds), fn($id) => $id > 0)));
+
+            $totalExtraSpaceFee = 0.00;
+            $spaceBreakdownParts = [];
+
+            if (!empty($selectedSpaceIds)) {
+                foreach ($selectedSpaceIds as $sId) {
+                    // Lock and validate space availability
+                    $spaceStmt = $pdo->prepare("SELECT id, space_number, space_name, monthly_fee, status FROM additional_spaces WHERE id = :id FOR UPDATE");
+                    $spaceStmt->execute([':id' => $sId]);
+                    $spaceRow = $spaceStmt->fetch();
+
+                    if (!$spaceRow) {
+                        $pdo->rollBack();
+                        http_response_code(422);
+                        echo json_encode([
+                            'status' => 'error',
+                            'message' => "Selected rental space #{$sId} does not exist."
+                        ]);
+                        exit;
+                    }
+
+                    if ($spaceRow['status'] !== 'available') {
+                        $pdo->rollBack();
+                        http_response_code(409);
+                        echo json_encode([
+                            'status' => 'error',
+                            'message' => "{$spaceRow['space_name']} is already occupied by another tenant and cannot be assigned."
+                        ]);
+                        exit;
+                    }
+
+                    $spaceFee = (float)$spaceRow['monthly_fee'];
+                    $totalExtraSpaceFee += $spaceFee;
+                    $spaceBreakdownParts[] = "{$spaceRow['space_name']} (₱" . number_format($spaceFee, 2) . "/mo)";
+
+                    // Assign space to the new tenant
+                    $assignSpaceStmt = $pdo->prepare("
+                        UPDATE additional_spaces
+                        SET status = 'occupied',
+                            assigned_tenant_id = :tid,
+                            assigned_unit_id = :uid,
+                            rented_at = NOW()
+                        WHERE id = :id
+                    ");
+                    $assignSpaceStmt->execute([
+                        ':tid' => $newId,
+                        ':uid' => $unitId,
+                        ':id' => $sId
+                    ]);
+                }
+            }
+
+            $spaceBreakdownText = !empty($spaceBreakdownParts) ? implode(' + ', $spaceBreakdownParts) : null;
+            $totalRentDue = $standardRentAmount + $totalExtraSpaceFee;
+
+            // 2. Monthly Rent Bill (₱3,000.00 base + additional space fees, Recurring)
             $dupRentStmt = $pdo->prepare("SELECT id FROM payments WHERE tenant_id = :tid AND payment_type = 'Rent' AND (billing_cycle = :cycle OR status IN ('unpaid', 'pending_setup')) LIMIT 1");
             $dupRentStmt->execute([':tid' => $newId, ':cycle' => $moveInCycle]);
             $existingRent = $dupRentStmt->fetch();
 
             if (!$existingRent) {
+                $rentNotes = "Monthly rent for " . date('F Y', strtotime($moveInCycle)) . " - Due upon occupancy.";
+                if ($totalExtraSpaceFee > 0) {
+                    $rentNotes .= " Includes additional space rental: {$spaceBreakdownText}.";
+                }
                 $rentStmt = $pdo->prepare("
                     INSERT INTO payments (
-                        tenant_id, unit_id, payment_type, billing_cycle, due_date, amount_due, amount_paid, 
+                        tenant_id, unit_id, payment_type, billing_cycle, due_date, base_rent_amount, additional_space_fee, additional_spaces_breakdown, amount_due, amount_paid, 
                         payment_date, status, payment_method, receipt_filename, verified_by_landlord, 
                         verification_notes, created_at
                     ) VALUES (
-                        :tenant_id, :unit_id, 'Rent', :cycle, :due_date, :amount_due, 0.00,
+                        :tenant_id, :unit_id, 'Rent', :cycle, :due_date, :base_rent, :extra_fee, :breakdown, :amount_due, 0.00,
                         NULL, 'unpaid', 'GCash / Bank Transfer', NULL, 0,
                         :vnotes, NOW()
                     )
@@ -659,8 +1087,11 @@ try {
                     ':unit_id' => $unitId,
                     ':cycle' => $moveInCycle,
                     ':due_date' => $rentDueDate,
-                    ':amount_due' => $standardRentAmount,
-                    ':vnotes' => "Monthly rent for " . date('F Y', strtotime($moveInCycle)) . " - Due upon occupancy."
+                    ':base_rent' => $standardRentAmount,
+                    ':extra_fee' => $totalExtraSpaceFee,
+                    ':breakdown' => $spaceBreakdownText,
+                    ':amount_due' => $totalRentDue,
+                    ':vnotes' => $rentNotes
                 ]);
                 $monthlyRentId = (int)$pdo->lastInsertId();
             } else {
@@ -760,6 +1191,14 @@ try {
         echo json_encode([
             'status' => 'error',
             'message' => 'This unit is already occupied and has an existing tenant account. Only one tenant account is allowed per unit.'
+        ]);
+        exit;
+    }
+    if (strpos($e->getMessage(), 'uq_active_tenant_email') !== false) {
+        http_response_code(409);
+        echo json_encode([
+            'status' => 'error',
+            'message' => 'This email address is already associated with an active tenant account.'
         ]);
         exit;
     }
