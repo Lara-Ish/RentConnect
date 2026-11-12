@@ -1,0 +1,902 @@
+/* ============================================================================
+   TaraRent - Split-Screen Apartment Login Design System
+   Warm cream, beige, gold, and dark brown palette.
+   Self-contained for login.php without modifying dashboard styles.
+   ============================================================================ */
+
+:root {
+  --tr-cream: #F4D99F;
+  --tr-beige: #F3E2BB;
+  --tr-gold: #C5A16B;
+  --tr-brown: #A9895C;
+  --tr-dark-brown: #38240D;
+  --tr-white: #FFFFFF;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  overflow-x: hidden;
+  font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  color: var(--tr-dark-brown);
+  background-color: var(--tr-cream);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ============================================================================
+   Two-Panel Split Screen Layout
+   ============================================================================ */
+.login-split-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  min-height: 100vh;
+  width: 100%;
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+/* ============================================================================
+   LEFT PANEL - Branding & Welcome Showcase
+   ============================================================================ */
+.login-brand-panel {
+  min-width: 0;
+  width: 100%;
+  background: linear-gradient(168deg, #F6DDA6 0%, var(--tr-cream) 58%, #EECF8E 100%);
+  padding: clamp(18px, 2.3vw, 30px) clamp(20px, 2.6vw, 34px);
+  display: flex;
+  flex-direction: column;
+  gap: clamp(12px, 1.5vw, 18px);
+  animation: trPanelFadeIn 0.55s ease-out both;
+}
+
+.brand-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-shrink: 0;
+}
+
+.brand-wordmark {
+  margin: 0;
+  font-family: 'Playfair Display', Georgia, 'Times New Roman', serif;
+  font-weight: 800;
+  font-size: clamp(2.25rem, 4vw, 3.35rem);
+  line-height: 1.02;
+  letter-spacing: -0.02em;
+  color: var(--tr-dark-brown);
+  background: linear-gradient(95deg, #38240D 0%, #68451B 48%, #9A743B 85%, #B58D4E 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 2px 3px rgba(56, 36, 13, 0.14));
+  user-select: none;
+}
+
+.brand-logo-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+.brand-logo {
+  height: clamp(46px, 5vw, 66px);
+  width: auto;
+  display: block;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 5px rgba(56, 36, 13, 0.22));
+  transition: transform 0.35s ease;
+}
+
+.brand-logo:hover {
+  transform: scale(1.04);
+}
+
+/* Framed Apartment Photo Showcase */
+.showcase-frame {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  min-height: 360px;
+  overflow: hidden;
+  border: 2px solid var(--tr-dark-brown);
+  border-radius: 2px;
+  background-color: #2c1d0c;
+  box-shadow:
+    0 14px 32px rgba(56, 36, 13, 0.22),
+    0 3px 8px rgba(56, 36, 13, 0.15);
+}
+
+.showcase-photo {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  object-position: center;
+  transition: transform 0.75s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.showcase-frame:hover .showcase-photo {
+  transform: scale(1.03);
+}
+
+.showcase-scrim {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    to top,
+    rgba(20, 12, 4, 0.84) 0%,
+    rgba(28, 17, 6, 0.6) 28%,
+    rgba(36, 22, 8, 0.24) 50%,
+    transparent 74%
+  );
+  z-index: 1;
+}
+
+.showcase-overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: clamp(20px, 2.8vw, 34px) clamp(18px, 2.4vw, 30px) clamp(18px, 2.3vw, 28px);
+  z-index: 2;
+}
+
+.welcome-script {
+  margin: 0 0 6px 0;
+  font-family: 'Great Vibes', 'Brush Script MT', cursive;
+  font-size: clamp(2.25rem, 3.6vw, 3.25rem);
+  font-weight: 400;
+  line-height: 1.1;
+  color: var(--tr-cream);
+  text-shadow:
+    0 2px 8px rgba(18, 10, 3, 0.85),
+    0 1px 2px rgba(18, 10, 3, 0.92);
+}
+
+.welcome-lead {
+  margin: 0 0 10px 4px;
+  font-style: italic;
+  font-weight: 500;
+  font-size: clamp(0.94rem, 1.12vw, 1.08rem);
+  line-height: 1.38;
+  color: var(--tr-white);
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.72);
+}
+
+.welcome-desc {
+  margin: 0 0 0 4px;
+  max-width: 500px;
+  font-style: italic;
+  font-weight: 400;
+  font-size: clamp(0.84rem, 0.98vw, 0.95rem);
+  line-height: 1.48;
+  color: rgba(255, 255, 255, 0.96);
+  text-shadow: 0 1px 5px rgba(0, 0, 0, 0.76);
+}
+
+/* ============================================================================
+   RIGHT PANEL - Blurred Interior Backdrop & Translucent Sign-In Card
+   ============================================================================ */
+.login-form-panel {
+  position: relative;
+  min-width: 0;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(22px, 3.5vw, 48px);
+  overflow: hidden;
+  background-color: #3a2a16;
+}
+
+.right-panel-bg {
+  position: absolute;
+  inset: -26px;
+  background-image: url('../images/login-apartment-interior.jpg');
+  background-size: cover;
+  background-position: center;
+  filter: blur(8px) saturate(0.95);
+  transform: scale(1.06);
+  z-index: 0;
+}
+
+.right-panel-overlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    145deg,
+    rgba(56, 36, 13, 0.26) 0%,
+    rgba(30, 19, 7, 0.36) 100%
+  );
+  z-index: 1;
+}
+
+.login-card {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  max-width: 440px;
+  background: rgba(255, 255, 255, 0.86);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1.5px solid var(--tr-dark-brown);
+  border-radius: 4px;
+  padding: clamp(32px, 3.8vw, 44px) clamp(26px, 3.5vw, 42px);
+  box-shadow:
+    0 20px 52px rgba(20, 12, 4, 0.28),
+    0 4px 12px rgba(56, 36, 13, 0.14);
+  animation: trCardEntrance 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.login-heading {
+  margin: 0 0 4px 0;
+  font-size: 28px;
+  font-weight: 800;
+  color: #161009;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.login-subheading {
+  margin: 0 0 26px 0;
+  font-size: 14.5px;
+  font-weight: 500;
+  color: var(--tr-dark-brown);
+  opacity: 0.88;
+}
+
+/* Form Inputs */
+.form-field-group {
+  margin-bottom: 16px;
+}
+
+.field-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #241607;
+}
+
+.warm-input {
+  width: 100%;
+  padding: 12px 16px;
+  border-radius: 10px;
+  border: 1px solid rgba(169, 137, 92, 0.45);
+  background-color: var(--tr-beige);
+  color: #241607;
+  font-family: inherit;
+  font-size: 14.5px;
+  font-weight: 500;
+  box-shadow:
+    0 3px 6px rgba(56, 36, 13, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.55);
+  transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
+}
+
+.warm-input::placeholder {
+  color: rgba(56, 36, 13, 0.48);
+  font-weight: 400;
+}
+
+.warm-input:focus {
+  outline: none;
+  background-color: #F7EBD2;
+  border-color: var(--tr-gold);
+  box-shadow:
+    0 0 0 3px rgba(197, 161, 107, 0.36),
+    0 4px 10px rgba(56, 36, 13, 0.18);
+}
+
+.warm-input:-webkit-autofill,
+.warm-input:-webkit-autofill:hover,
+.warm-input:-webkit-autofill:focus {
+  -webkit-text-fill-color: #241607;
+  box-shadow:
+    0 0 0 1000px var(--tr-beige) inset,
+    0 3px 6px rgba(56, 36, 13, 0.16);
+  transition: background-color 5000s ease-in-out 0s;
+}
+
+.password-input-wrap {
+  position: relative;
+}
+
+.warm-input-password {
+  padding-right: 46px;
+}
+
+.password-toggle-btn {
+  position: absolute;
+  right: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #6B4E29;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color 0.2s ease, background-color 0.2s ease;
+}
+
+.password-toggle-btn:hover,
+.password-toggle-btn:focus-visible {
+  color: var(--tr-dark-brown);
+  background-color: rgba(197, 161, 107, 0.24);
+  outline: none;
+}
+
+.password-toggle-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* Forgot Password */
+.forgot-password-wrapper {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  margin-top: 7px;
+  margin-bottom: 12px;
+}
+
+.forgot-password-link {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--tr-dark-brown);
+  text-decoration: none;
+  transition: color 0.2s ease, opacity 0.2s ease;
+}
+
+.forgot-password-link:hover,
+.forgot-password-link:focus-visible {
+  color: #7D5B30;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  outline: none;
+}
+
+/* Remember Me Checkbox */
+.remember-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.remember-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #241607;
+  cursor: pointer;
+  user-select: none;
+}
+
+.remember-checkbox {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  flex-shrink: 0;
+  border-radius: 3px;
+  border: 1.4px solid var(--tr-brown);
+  background-color: var(--tr-beige);
+  box-shadow: 0 2px 4px rgba(56, 36, 13, 0.14);
+  display: inline-grid;
+  place-content: center;
+  cursor: pointer;
+  transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.remember-checkbox::before {
+  content: '';
+  width: 10px;
+  height: 6px;
+  border-left: 2.2px solid var(--tr-white);
+  border-bottom: 2.2px solid var(--tr-white);
+  transform: rotate(-45deg) scale(0);
+  margin-top: -2px;
+  transition: transform 0.14s ease-in-out;
+}
+
+.remember-checkbox:checked {
+  background-color: var(--tr-brown);
+  border-color: var(--tr-dark-brown);
+}
+
+.remember-checkbox:checked::before {
+  transform: rotate(-45deg) scale(1);
+}
+
+.remember-checkbox:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(197, 161, 107, 0.42);
+}
+
+/* Warm Brown/Gold Pill Action Buttons */
+.btn-center-wrap {
+  display: flex;
+  justify-content: center;
+}
+
+.btn-warm-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-width: 196px;
+  max-width: 100%;
+  padding: 10px 28px;
+  border-radius: 9999px;
+  border: 1px solid #594021;
+  background: linear-gradient(180deg, #C3A270 0%, var(--tr-brown) 100%);
+  color: #1B1105;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  box-shadow:
+    0 3px 8px rgba(56, 36, 13, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  transition: transform 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.btn-warm-pill:hover {
+  transform: translateY(-1px);
+  background: linear-gradient(180deg, #CBA976 0%, #9E7D4F 100%);
+  box-shadow:
+    0 6px 14px rgba(56, 36, 13, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.34);
+}
+
+.btn-warm-pill:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 5px rgba(56, 36, 13, 0.22);
+}
+
+.btn-warm-pill:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 3px rgba(197, 161, 107, 0.48),
+    0 4px 10px rgba(56, 36, 13, 0.24);
+}
+
+.btn-warm-pill svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.btn-warm-outline-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 11px 22px;
+  border-radius: 9999px;
+  border: 1.2px solid var(--tr-brown);
+  background-color: var(--tr-beige);
+  color: var(--tr-dark-brown);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(56, 36, 13, 0.14);
+  transition: background-color 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+}
+
+.btn-warm-outline-pill:hover {
+  background-color: #ECD4A1;
+  border-color: var(--tr-dark-brown);
+  transform: translateY(-1px);
+}
+
+/* OR Horizontal Divider */
+.or-divider {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 18px 0;
+}
+
+.or-divider-line {
+  flex: 1;
+  height: 1px;
+  background-color: rgba(56, 36, 13, 0.52);
+}
+
+.or-divider-text {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--tr-dark-brown);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+/* Status & Error Alerts */
+.login-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 12px 14px;
+  margin-bottom: 18px;
+  border-radius: 10px;
+  border: 1px solid #C87B70;
+  border-left: 4px solid #A8382B;
+  background: rgba(255, 244, 242, 0.94);
+  color: #5C1D16;
+  box-shadow: 0 3px 10px rgba(56, 36, 13, 0.1);
+  animation: trAlertFadeIn 0.28s ease-out both;
+}
+
+.login-alert-icon {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: 9999px;
+  background: rgba(168, 56, 43, 0.14);
+  color: #8F251A;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+}
+
+.login-alert-body h4 {
+  margin: 0 0 2px 0;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #7A1E15;
+}
+
+.login-alert-body p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.login-section-fade {
+  animation: trSectionFadeIn 0.25s ease-out both;
+}
+
+/* ============================================================================
+   Face ID Scanner Card & Oval Guide (Preserved Interactive Controls)
+   ============================================================================ */
+.face-scan-hint {
+  font-size: 13px;
+  color: var(--tr-dark-brown);
+  opacity: 0.85;
+  margin: -12px 0 14px 0;
+  line-height: 1.45;
+}
+
+.face-cam-card {
+  position: relative;
+  width: 100%;
+  max-width: 356px;
+  height: 290px;
+  margin: 0 auto;
+  border-radius: 18px;
+  border: 1.5px solid var(--tr-dark-brown);
+  overflow: hidden;
+  background: #140f08;
+  box-shadow:
+    inset 0 3px 6px rgba(0, 0, 0, 0.45),
+    0 10px 24px rgba(56, 36, 13, 0.22);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gcash-camera-mask,
+.face-oval-guide {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.face-oval-ring {
+  width: 170px;
+  height: 226px;
+  border: 3px solid rgba(255, 255, 255, 0.85);
+  border-radius: 50%;
+  box-shadow: 0 0 0 9999px rgba(15, 11, 7, 0.7);
+  transition: border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease;
+  background: transparent;
+}
+
+.face-oval-ring.needs-closer {
+  border-color: #f59e0b !important;
+  border-style: dashed !important;
+  box-shadow: 0 0 0 9999px rgba(15, 11, 7, 0.72), 0 0 18px rgba(245, 158, 11, 0.5) !important;
+}
+
+.face-oval-ring.needs-center {
+  border-color: #f43f5e !important;
+  border-style: dashed !important;
+  box-shadow: 0 0 0 9999px rgba(15, 11, 7, 0.72), 0 0 18px rgba(244, 63, 94, 0.5) !important;
+}
+
+.face-oval-ring.multi-face {
+  border-color: #ef4444 !important;
+  border-style: solid !important;
+  box-shadow: 0 0 0 9999px rgba(15, 11, 7, 0.75), 0 0 22px rgba(239, 68, 68, 0.8) !important;
+}
+
+.face-oval-ring.challenge-active,
+.face-oval-ring.detecting {
+  border-color: #38bdf8 !important;
+  border-style: solid !important;
+  box-shadow: 0 0 0 9999px rgba(15, 11, 7, 0.68), 0 0 20px rgba(56, 189, 248, 0.7) !important;
+}
+
+.face-oval-ring.turned,
+.face-oval-ring.liveness-ready {
+  border-color: #a855f7 !important;
+  border-style: solid !important;
+  box-shadow: 0 0 0 9999px rgba(15, 11, 7, 0.65), 0 0 22px rgba(168, 85, 247, 0.75) !important;
+}
+
+.face-oval-ring.perfect-capturing,
+.face-oval-ring.holding,
+.face-oval-ring.verifying,
+.face-oval-ring.captured {
+  border-color: #10b981 !important;
+  border-style: solid !important;
+  box-shadow: 0 0 0 9999px rgba(15, 11, 7, 0.6), 0 0 30px rgba(16, 185, 129, 0.9) !important;
+  transform: scale(1.02);
+}
+
+.face-oval-ring.spoof-detected {
+  border-color: #ef4444 !important;
+  border-style: solid !important;
+  box-shadow: 0 0 0 9999px rgba(15, 11, 7, 0.75), 0 0 25px rgba(239, 68, 68, 0.85) !important;
+}
+
+.face-status-pill {
+  position: absolute;
+  bottom: 11px;
+  left: 14px;
+  right: 14px;
+  background: rgba(24, 15, 5, 0.88);
+  backdrop-filter: blur(8px);
+  color: var(--tr-white);
+  padding: 7px 14px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  transition: all 0.2s ease;
+  z-index: 10;
+}
+
+.face-spoof-warning {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  right: 12px;
+  background: rgba(185, 28, 28, 0.95);
+  backdrop-filter: blur(8px);
+  color: var(--tr-white);
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 11.5px;
+  font-weight: 800;
+  text-align: center;
+  box-shadow: 0 4px 16px rgba(185, 28, 28, 0.4);
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  line-height: 1.35;
+  animation: spoofPulse 1.5s infinite alternate;
+}
+
+.face-timed-alert {
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1.5px solid #e2a49c;
+  background: rgba(255, 244, 242, 0.96);
+  box-shadow: 0 6px 16px rgba(168, 56, 43, 0.14);
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-top: 14px;
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+
+/* ============================================================================
+   Animations
+   ============================================================================ */
+@keyframes trPanelFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes trCardEntrance {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes trAlertFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes trSectionFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes spoofPulse {
+  from {
+    transform: scale(1);
+  }
+  to {
+    transform: scale(1.02);
+  }
+}
+
+/* ============================================================================
+   Responsive Breakpoints (Laptop, Tablet, Mobile)
+   ============================================================================ */
+@media (max-width: 960px) {
+  .login-split-layout {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 100vh;
+  }
+
+  .login-brand-panel {
+    padding: 18px 22px 22px;
+    gap: 12px;
+  }
+
+  .showcase-frame {
+    min-height: 260px;
+    max-height: 360px;
+  }
+
+  .login-form-panel {
+    padding: 32px 20px 44px;
+  }
+
+  .login-card {
+    max-width: 460px;
+  }
+}
+
+@media (max-width: 540px) {
+  .login-brand-panel {
+    padding: 14px 14px 18px;
+    gap: 10px;
+  }
+
+  .brand-wordmark {
+    font-size: 2rem;
+  }
+
+  .brand-logo {
+    height: 44px;
+  }
+
+  .showcase-frame {
+    min-height: 230px;
+    max-height: 280px;
+  }
+
+  .showcase-overlay {
+    padding: 16px 14px 14px;
+  }
+
+  .welcome-script {
+    font-size: 1.85rem;
+    margin-bottom: 4px;
+  }
+
+  .welcome-lead {
+    font-size: 0.85rem;
+    margin-bottom: 6px;
+  }
+
+  .welcome-desc {
+    font-size: 0.78rem;
+    line-height: 1.4;
+  }
+
+  .login-form-panel {
+    padding: 22px 14px 32px;
+  }
+
+  .login-card {
+    padding: 26px 20px 28px;
+  }
+
+  .login-heading {
+    font-size: 24px;
+  }
+
+  .warm-input {
+    font-size: 16px;
+  }
+
+  .btn-warm-pill {
+    width: 100%;
+    max-width: 250px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-brand-panel,
+  .login-card,
+  .login-alert,
+  .login-section-fade {
+    animation: none !important;
+  }
+
+  .showcase-photo,
+  .brand-logo,
+  .btn-warm-pill,
+  .warm-input {
+    transition: none !important;
+  }
+}

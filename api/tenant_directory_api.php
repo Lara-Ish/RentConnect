@@ -307,6 +307,24 @@ try {
                 exit;
             }
 
+            // Require fresh Owner/Admin account password verification on backend before deletion
+            $ownerPassword = (string)($input['owner_password'] ?? '');
+            $pwCheck = AccessControl::verifyOwnerPassword($pdo, $ownerPassword);
+            if (!$pwCheck['valid']) {
+                http_response_code((int)$pwCheck['status_code']);
+                echo json_encode(['status' => 'error', 'message' => $pwCheck['message']]);
+                exit;
+            }
+
+            // Confirm the targeted account is specifically a tenant before proceeding
+            $targetStmt = $pdo->prepare("SELECT id FROM users WHERE id = :id AND role = 'tenant' LIMIT 1");
+            $targetStmt->execute([':id' => $tenantId]);
+            if (!$targetStmt->fetch(PDO::FETCH_ASSOC)) {
+                http_response_code(404);
+                echo json_encode(['status' => 'error', 'message' => 'Target tenant account was not found.']);
+                exit;
+            }
+
             $result = TenantService::markMovedOut($pdo, $tenantId);
 
             if ($result['status'] === 'error') {
@@ -447,12 +465,27 @@ try {
             }
         }
 
-        // PERMANENT DELETE ACTION (Permanent Removal with Explicit Confirmation)
+        // PERMANENT DELETE ACTION (Permanent Removal with Explicit Owner Password Confirmation)
         if ($action === 'permanent_delete') {
             $tenantId = (int)($input['tenant_id'] ?? 0);
             if ($tenantId <= 0) {
                 http_response_code(422);
                 echo json_encode(['status' => 'error', 'message' => 'Invalid tenant ID.']);
+                exit;
+            }
+
+            $currentUserId = (int)(Auth::user()['id'] ?? 0);
+            if ($tenantId === $currentUserId) {
+                http_response_code(403);
+                echo json_encode(['status' => 'error', 'message' => 'Cannot delete the logged-in administrator account.']);
+                exit;
+            }
+
+            $ownerPassword = (string)($input['owner_password'] ?? '');
+            $pwCheck = AccessControl::verifyOwnerPassword($pdo, $ownerPassword);
+            if (!$pwCheck['valid']) {
+                http_response_code((int)$pwCheck['status_code']);
+                echo json_encode(['status' => 'error', 'message' => $pwCheck['message']]);
                 exit;
             }
 
@@ -474,12 +507,13 @@ try {
                     exit;
                 }
 
-                // Delete dependent non-financial items
+                // Delete dependent non-financial items and release any space reference
+                $pdo->prepare("UPDATE additional_spaces SET status = 'available', assigned_tenant_id = NULL, assigned_unit_id = NULL, rented_at = NULL WHERE assigned_tenant_id = :id")->execute([':id' => $tenantId]);
                 $pdo->prepare("DELETE FROM notifications WHERE user_id = :id")->execute([':id' => $tenantId]);
                 $pdo->prepare("DELETE FROM password_resets WHERE user_id = :id")->execute([':id' => $tenantId]);
                 $pdo->prepare("DELETE FROM maintenance_tickets WHERE tenant_id = :id")->execute([':id' => $tenantId]);
                 $pdo->prepare("DELETE FROM payments WHERE tenant_id = :id")->execute([':id' => $tenantId]);
-                $pdo->prepare("DELETE FROM users WHERE id = :id")->execute([':id' => $tenantId]);
+                $pdo->prepare("DELETE FROM users WHERE id = :id AND role = 'tenant'")->execute([':id' => $tenantId]);
 
                 $pdo->commit();
 
@@ -511,14 +545,17 @@ try {
                 $decision = 'verified';
             }
 
+            $isVerifiedInt = ($decision === 'verified') ? 1 : 0;
             $update = $pdo->prepare("
                 UPDATE users 
                 SET verification_status = :status,
-                    id_verified_at = IF(:status = 'verified', NOW(), NULL)
+                    is_verified = :is_verified,
+                    id_verified_at = " . ($decision === 'verified' ? 'NOW()' : 'NULL') . "
                 WHERE id = :id AND role = 'tenant'
             ");
             $update->execute([
                 ':status' => $decision,
+                ':is_verified' => $isVerifiedInt,
                 ':id' => $tenantId
             ]);
 

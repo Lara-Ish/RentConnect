@@ -85,6 +85,7 @@ try {
 
         // ACTION: Upload Profile Picture (Owner and Tenant)
         if ($action === 'upload_profile_picture') {
+            AccessControl::requireVerifiedTenantJson($pdo, $currentUser);
             if (!isset($_FILES['profile_picture']) || $_FILES['profile_picture']['error'] !== UPLOAD_ERR_OK) {
                 http_response_code(422);
                 echo json_encode([
@@ -191,6 +192,7 @@ try {
 
         // ACTION: Remove Profile Picture (revert to circular initial icon)
         if ($action === 'remove_profile_picture') {
+            AccessControl::requireVerifiedTenantJson($pdo, $currentUser);
             $oldStmt = $pdo->prepare("SELECT profile_picture, name FROM users WHERE id = :id LIMIT 1");
             $oldStmt->execute([':id' => $userId]);
             $userRow = $oldStmt->fetch(PDO::FETCH_ASSOC);
@@ -718,6 +720,7 @@ try {
 
         // ACTION B: Change Account Password
         if ($action === 'change_password') {
+            AccessControl::requireVerifiedTenantJson($pdo, $currentUser);
             $currentPassword = (string)($input['current_password'] ?? '');
             $newPassword = (string)($input['new_password'] ?? '');
             $confirmPassword = (string)($input['confirm_password'] ?? '');
@@ -777,6 +780,7 @@ try {
 
         // ACTION C: Update Account Information (Phone, Email, Emergency Contacts)
         if ($action === 'update_account_info') {
+            AccessControl::requireVerifiedTenantJson($pdo, $currentUser);
             $email = trim((string)($input['email'] ?? ''));
             $phone = trim((string)($input['phone'] ?? ''));
             $emergencyName = trim((string)($input['emergency_contact_name'] ?? ''));
@@ -817,7 +821,7 @@ try {
                 UPDATE users 
                 SET email = :email,
                     phone = :phone,
-                    emergency_contact = :em_name,
+                    emergency_contact = :em_contact,
                     emergency_contact_name = :em_name,
                     emergency_contact_relationship = :em_rel,
                     emergency_contact_phone = :em_phone
@@ -826,6 +830,7 @@ try {
             $updateStmt->execute([
                 ':email' => !empty($email) ? $email : null,
                 ':phone' => !empty($phone) ? $phone : null,
+                ':em_contact' => !empty($emergencyName) ? $emergencyName : null,
                 ':em_name' => !empty($emergencyName) ? $emergencyName : null,
                 ':em_rel' => !empty($emergencyRel) ? $emergencyRel : null,
                 ':em_phone' => !empty($emergencyPhone) ? $emergencyPhone : null,
@@ -840,7 +845,7 @@ try {
 
             // If tenant updated info, notify landlord
             if (!Auth::isLandlord()) {
-                $tenantName = $user['name'] ?? 'Tenant';
+                $tenantName = $currentUser['name'] ?? 'Tenant';
                 NotificationService::notifyLandlords(
                     $pdo,
                     'account',
@@ -870,13 +875,19 @@ try {
                 exit;
             }
 
+            $isVerifiedInt = ($decision === 'verified') ? 1 : 0;
             $stmt = $pdo->prepare("
                 UPDATE users 
                 SET verification_status = :status,
+                    is_verified = :is_verified,
                     id_verified_at = " . ($decision === 'verified' ? 'NOW()' : 'NULL') . "
                 WHERE id = :id AND role = 'tenant'
             ");
-            $stmt->execute([':status' => $decision, ':id' => $targetTenantId]);
+            $stmt->execute([
+                ':status' => $decision,
+                ':is_verified' => $isVerifiedInt,
+                ':id' => $targetTenantId
+            ]);
 
             // Notify Tenant of ID verification decision
             $title = ($decision === 'verified') ? 'ID Verification Approved' : 'ID Verification Rejected';

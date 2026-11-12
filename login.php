@@ -9,7 +9,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/config/auth.php';
 
-// Redirect if already authenticated
+// Redirect if already authenticated (via active session or valid Remember Me token)
 if (Auth::check()) {
     if (Auth::isLandlord()) {
         header('Location: admin_dashboard.php');
@@ -25,14 +25,22 @@ if (isset($_GET['msg']) && $_GET['msg'] === 'deactivated') {
     $errorMessage = 'This account has been deactivated or removed by property management.';
 }
 
+$savedLogin = Auth::getSavedLoginIdentifier();
+$submittedUsername = $savedLogin;
+$rememberChecked = ($savedLogin !== '');
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $username = trim((string)($_POST['username'] ?? ''));
     $password = (string)($_POST['password'] ?? '');
+    $rememberMe = !empty($_POST['remember_me']);
+
+    $submittedUsername = $username;
+    $rememberChecked = $rememberMe;
 
     if (empty($username) || empty($password)) {
-        $errorMessage = 'Please provide both username and password.';
+        $errorMessage = 'Please provide both email address and password.';
     } else {
-        if (Auth::attempt($username, $password)) {
+        if (Auth::attempt($username, $password, $rememberMe)) {
             if (Auth::isLandlord()) {
                 header('Location: admin_dashboard.php');
             } else {
@@ -40,7 +48,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             exit;
         } else {
-            $errorMessage = 'Invalid username or password.';
+            $errorMessage = 'Invalid email address or password.';
         }
     }
 }
@@ -63,10 +71,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   <!-- Typography -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Great+Vibes&family=Playfair+Display:wght@700;800&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,500&display=swap" rel="stylesheet">
 
-  <!-- Claymorphism Design System -->
-  <link rel="stylesheet" href="assets/css/claymorphism.css">
+  <!-- Split-Screen Login Design System -->
+  <link rel="stylesheet" href="assets/css/login.css">
 
   <!-- face-api.js for 68-Point Facial Landmark Tracking (Local with CDN fallback) -->
   <script src="assets/js/face-api.min.js"></script>
@@ -75,379 +83,214 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       document.write('<script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.min.js"><\/script>');
     }
   </script>
-
-  <style>
-    .login-wrapper {
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 24px;
-    }
-
-    .login-clay-card {
-      width: 100%;
-      max-width: 440px;
-      padding: 44px 38px;
-    }
-
-    .login-heading {
-      font-size: 32px;
-      font-weight: 800;
-      color: #0f172a;
-      letter-spacing: -0.8px;
-      margin-bottom: 24px;
-      text-align: center;
-    }
-
-    .app-badge-pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 6px 16px;
-      border-radius: var(--radius-pill);
-      background: var(--clay-input-bg);
-      box-shadow: var(--clay-sunken-shadow);
-      font-size: 12px;
-      font-weight: 700;
-      color: var(--clay-primary-dark);
-      margin-bottom: 22px;
-    }
-
-    /* GCash-Style Oval Camera Mask UI Styles */
-    .face-cam-card {
-      position: relative;
-      width: 100%;
-      max-width: 360px;
-      height: 300px;
-      margin: 0 auto;
-      border-radius: 22px;
-      overflow: hidden;
-      background: #090d16;
-      box-shadow: inset 0 3px 6px rgba(0, 0, 0, 0.45), 0 10px 25px rgba(0, 0, 0, 0.2);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    /* GCash-Style Semi-Transparent Dark Overlay across the <video> feed */
-    .gcash-camera-mask,
-    .face-oval-guide {
-      position: absolute;
-      inset: 0;
-      pointer-events: none;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 10;
-    }
-
-    /* Clear, transparent oval cutout in the exact center */
-    .face-oval-ring {
-      width: 175px;
-      height: 235px;
-      border: 3px solid rgba(255, 255, 255, 0.85);
-      border-radius: 50%;
-      /* 9999px box-shadow creates the semi-transparent dark overlay over the entire feed outside the cutout */
-      box-shadow: 0 0 0 9999px rgba(9, 13, 22, 0.72);
-      transition: border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease;
-      background: transparent;
-    }
-
-    .face-oval-ring.needs-closer {
-      border-color: #f59e0b !important;
-      border-style: dashed !important;
-      box-shadow: 0 0 0 9999px rgba(9, 13, 22, 0.72), 0 0 18px rgba(245, 158, 11, 0.5) !important;
-    }
-
-    .face-oval-ring.needs-center {
-      border-color: #f43f5e !important;
-      border-style: dashed !important;
-      box-shadow: 0 0 0 9999px rgba(9, 13, 22, 0.72), 0 0 18px rgba(244, 63, 94, 0.5) !important;
-    }
-
-    .face-oval-ring.multi-face {
-      border-color: #ef4444 !important;
-      border-style: solid !important;
-      box-shadow: 0 0 0 9999px rgba(9, 13, 22, 0.75), 0 0 22px rgba(239, 68, 68, 0.8) !important;
-    }
-
-    .face-oval-ring.challenge-active,
-    .face-oval-ring.detecting {
-      border-color: #38bdf8 !important;
-      border-style: solid !important;
-      box-shadow: 0 0 0 9999px rgba(9, 13, 22, 0.68), 0 0 20px rgba(56, 189, 248, 0.7) !important;
-    }
-
-    .face-oval-ring.turned,
-    .face-oval-ring.liveness-ready {
-      border-color: #a855f7 !important;
-      border-style: solid !important;
-      box-shadow: 0 0 0 9999px rgba(9, 13, 22, 0.65), 0 0 22px rgba(168, 85, 247, 0.75) !important;
-    }
-
-    .face-oval-ring.perfect-capturing,
-    .face-oval-ring.holding,
-    .face-oval-ring.verifying,
-    .face-oval-ring.captured {
-      border-color: #10b981 !important;
-      border-style: solid !important;
-      box-shadow: 0 0 0 9999px rgba(9, 13, 22, 0.6), 0 0 30px rgba(16, 185, 129, 0.9) !important;
-      transform: scale(1.02);
-    }
-
-    .face-oval-ring.spoof-detected {
-      border-color: #ef4444 !important;
-      border-style: solid !important;
-      box-shadow: 0 0 0 9999px rgba(9, 13, 22, 0.75), 0 0 25px rgba(239, 68, 68, 0.85) !important;
-    }
-
-    .face-status-pill {
-      position: absolute;
-      bottom: 12px;
-      left: 16px;
-      right: 16px;
-      background: rgba(15, 23, 42, 0.9);
-      backdrop-filter: blur(8px);
-      color: #ffffff;
-      padding: 7px 14px;
-      border-radius: 12px;
-      font-size: 12px;
-      font-weight: 700;
-      text-align: center;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
-      transition: all 0.2s ease;
-      z-index: 10;
-    }
-
-    /* Real-Time Anti-Spoofing & Liveness Warning Overlay Banner */
-    .face-spoof-warning {
-      position: absolute;
-      top: 10px;
-      left: 12px;
-      right: 12px;
-      background: rgba(225, 29, 72, 0.96);
-      backdrop-filter: blur(8px);
-      color: #ffffff;
-      padding: 8px 12px;
-      border-radius: 12px;
-      font-size: 11.5px;
-      font-weight: 800;
-      text-align: center;
-      box-shadow: 0 4px 16px rgba(225, 29, 72, 0.4), inset 0 1px 1px rgba(255, 255, 255, 0.3);
-      z-index: 25;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      line-height: 1.35;
-      animation: spoofPulse 1.5s infinite alternate;
-    }
-
-    @keyframes spoofPulse {
-      from { transform: scale(1); }
-      to { transform: scale(1.02); }
-    }
-
-    .face-hold-progress-track {
-      width: 100%;
-      height: 6px;
-      background: #e2e8f0;
-      border-radius: 999px;
-      overflow: hidden;
-      margin-top: 14px;
-    }
-
-    .face-hold-progress-fill {
-      width: 0%;
-      height: 100%;
-      background: linear-gradient(90deg, #38bdf8, #10b981);
-      transition: width 0.08s linear;
-    }
-
-    .face-timed-alert {
-      padding: 14px 18px;
-      border-radius: var(--radius-xl);
-      border: 2px solid #fecdd3;
-      background: #fff1f2;
-      box-shadow: 6px 6px 16px rgba(225, 29, 72, 0.15), inset 2px 2px 4px rgba(255, 255, 255, 0.8);
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      margin-top: 16px;
-      opacity: 1;
-      transform: translateY(0);
-      transition: opacity 0.5s ease, transform 0.5s ease;
-    }
-
-    /* Forgot Password Text Link */
-    .forgot-password-wrapper {
-      display: flex;
-      justify-content: flex-end;
-      align-items: center;
-      margin-top: 8px;
-      margin-bottom: 18px;
-    }
-
-    .forgot-password-link {
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--clay-primary-dark);
-      text-decoration: none;
-      transition: color 0.2s ease, text-decoration 0.2s ease;
-      cursor: pointer;
-      display: inline-block;
-    }
-
-    .forgot-password-link:hover,
-    .forgot-password-link:focus {
-      color: #4f46e5;
-      text-decoration: underline;
-      text-underline-offset: 3px;
-    }
-  </style>
 </head>
 <body>
 
-  <div class="login-wrapper">
-    <div class="clay-card login-clay-card">
-      
-      <!-- Brand Pill -->
-      <div style="text-align: center;">
-        <div class="app-badge-pill" style="display: inline-flex; align-items: center; gap: 8px;">
-          <img src="assets/images/tararent-logo.png" alt="TaraRent Logo" style="width: 20px; height: 20px; object-fit: contain;">
-          <span>TaraRent</span>
+  <main class="login-split-layout">
+
+    <!-- ================= LEFT PANEL: BRANDING & WELCOME SHOWCASE ================= -->
+    <section class="login-brand-panel" aria-label="TaraRent Overview">
+      <header class="brand-header">
+        <span class="brand-wordmark">TaraRent</span>
+        <div class="brand-logo-wrap">
+          <img src="assets/images/tararent-logo.png" alt="TaraRent Logo" class="brand-logo">
+        </div>
+      </header>
+
+      <div class="showcase-frame">
+        <img
+          src="assets/images/login-apartment-interior.jpg"
+          alt="TaraRent apartment living and kitchen interior"
+          class="showcase-photo"
+        >
+        <div class="showcase-scrim" aria-hidden="true"></div>
+        <div class="showcase-overlay">
+          <h2 class="welcome-script">Welcome to Tara Rent!</h2>
+          <p class="welcome-lead">Your rental management, made easier.</p>
+          <p class="welcome-desc">
+            Manage your rental properties, monitor payments, and keep track of your transactions&mdash;all in one convenient place.
+          </p>
         </div>
       </div>
+    </section>
 
-      <!-- Main Heading: Strictly "Log in" as required -->
-      <h1 class="login-heading" id="loginMainHeading">Log in</h1>
+    <!-- ================= RIGHT PANEL: BLURRED BACKDROP & SIGN-IN CARD ================= -->
+    <section class="login-form-panel" aria-label="Account Sign In">
+      <div class="right-panel-bg" aria-hidden="true"></div>
+      <div class="right-panel-overlay" aria-hidden="true"></div>
 
-      <!-- Error Notification for Password Form -->
-      <?php if ($errorMessage): ?>
-        <div class="alert-clay alert-clay-warning" style="margin-bottom: 20px;" id="passwordErrorAlert">
-          <div class="alert-icon-clay">⚠️</div>
-          <div class="alert-body-clay">
-            <h4 style="color: #9f1239;">Unable to log in</h4>
-            <p><?= htmlspecialchars($errorMessage, ENT_QUOTES, 'UTF-8') ?></p>
-          </div>
-        </div>
-      <?php endif; ?>
+      <div class="login-card">
+        <h1 class="login-heading" id="loginMainHeading">Sign In</h1>
+        <p class="login-subheading" id="loginSubHeading">Sign in to your account.</p>
 
-      <!-- ================= 1. STANDARD USERNAME/PASSWORD SECTION ================= -->
-      <div id="passwordLoginSection">
-        <form action="login.php" method="POST" id="passwordLoginForm">
-          <div class="form-group">
-            <label for="username" class="form-label">Username or Email</label>
-            <input 
-              type="text" 
-              id="username" 
-              name="username" 
-              class="clay-input" 
-              placeholder="Enter username or email" 
-              required 
-              autofocus
-            >
-          </div>
-
-          <div class="form-group" style="margin-bottom: 0;">
-            <label for="password" class="form-label">Password</label>
-            <input 
-              type="password" 
-              id="password" 
-              name="password" 
-              class="clay-input" 
-              placeholder="Enter password" 
-              required
-            >
-          </div>
-
-          <div class="forgot-password-wrapper">
-            <a href="forgot_password.php" class="forgot-password-link" title="Forgot Password?">Forgot Password?</a>
-          </div>
-
-          <button type="submit" class="clay-btn clay-btn-primary clay-btn-full" style="margin-top: 0;">
-            <span>Log in</span>
-          </button>
-        </form>
-
-        <!-- Divider -->
-        <div style="display: flex; align-items: center; margin: 22px 0 16px 0; gap: 12px;">
-          <div style="flex: 1; height: 1px; background: rgba(148, 163, 184, 0.4);"></div>
-          <span style="font-size: 11.5px; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px;">OR BIOMETRIC</span>
-          <div style="flex: 1; height: 1px; background: rgba(148, 163, 184, 0.4);"></div>
-        </div>
-
-        <!-- Prominent "Use Face ID" Button below standard form -->
-        <button type="button" id="btnUseFaceId" class="clay-btn clay-btn-secondary clay-btn-full" style="display: flex; align-items: center; justify-content: center; gap: 10px; font-weight: 700; padding: 13px 20px; font-size: 14.5px; background: #ffffff; border: 1.5px solid #cbd5e1; box-shadow: var(--clay-button-shadow);" onclick="switchToFaceIdLogin()">
-          <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-700">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M6.827 6.175A2.31 2.31 0 0 1 5.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 0 0-1.134-.175 2.31 2.31 0 0 1-1.64-1.055l-.822-1.316a2.192 2.192 0 0 0-1.736-1.039 48.774 48.774 0 0 0-5.232 0 2.192 2.192 0 0 0-1.736 1.039l-.821 1.316Z" />
-            <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 12.75a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0ZM18.75 10.5h.008v.008h-.008V10.5Z" />
-          </svg>
-          <span>Use Face ID</span>
-        </button>
-      </div>
-
-      <!-- ================= 2. AUTOMATED FACE ID LOGIN SECTION ================= -->
-      <div id="faceIdSection" style="display: none;">
-        <p style="font-size: 13px; color: var(--text-muted); text-align: center; margin: -10px 0 16px 0;">
-          Look directly at the camera and blink or turn your head slightly to log in automatically.
-        </p>
-
-        <!-- Mirrored Live Webcam Box with Oval Guide -->
-        <div class="face-cam-card gcash-kyc-cam">
-          <!-- Real-Time Anti-Spoofing / Liveness Warning Overlay Banner -->
-          <div id="faceSpoofWarningOverlay" class="face-spoof-warning" style="display: none; align-items: center; justify-content: center; gap: 8px;">
-            <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6" style="color: #ffffff; width: 18px; height: 18px;">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m0-10.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.75c0 5.592 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.57-.598-3.75h-.002A11.959 11.959 0 0 1 12 2.964ZM12 15.75h.007v.008H12v-.008Z" />
-            </svg>
-            <span id="faceSpoofWarningText">Spoof detected: Please remove photos or screens from the camera.</span>
-          </div>
-
-          <!-- Live Webcam Feed (Mirrored via CSS) -->
-          <video id="faceWebcamVideo" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); -webkit-transform: scaleX(-1);"></video>
-
-          <!-- Hidden Canvas for Mirror Frame Capture -->
-          <canvas id="faceCaptureCanvas" style="display: none;"></canvas>
-
-          <!-- GCash-Style Semi-Transparent Dark Overlay across <video> with Transparent Oval Cutout in Center -->
-          <div class="gcash-camera-mask face-oval-guide" id="cameraDarkOverlay">
-            <div class="face-oval-ring" id="biometricOvalRing"></div>
-          </div>
-
-          <!-- Dynamic Visual Feedback Badge -->
-          <div class="face-status-pill" id="faceStatusPill">
-            <span id="faceStatusIcon">👀</span>
-            <span id="faceStatusText">Look directly at camera to start</span>
-          </div>
-        </div>
-
-        <!-- Timed Notification Alert Bar for Rejection / Error -->
-        <div id="faceLoginAlert" class="face-timed-alert" style="display: none;">
-          <div style="width: 32px; height: 32px; border-radius: 10px; background: #ffe4e6; color: #e11d48; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 800; flex-shrink: 0;">
-            ✕
-          </div>
-          <div style="flex: 1;">
-            <div style="font-size: 13.5px; font-weight: 700; color: #9f1239; line-height: 1.35;" id="faceLoginAlertMsg">
-              Face not recognized. Please try again or use your password.
+        <!-- Error Notification for Password Form -->
+        <?php if ($errorMessage): ?>
+          <div class="login-alert" role="alert" id="passwordErrorAlert">
+            <div class="login-alert-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/>
+              </svg>
+            </div>
+            <div class="login-alert-body">
+              <h4>Unable to sign in</h4>
+              <p><?= htmlspecialchars($errorMessage, ENT_QUOTES, 'UTF-8') ?></p>
             </div>
           </div>
+        <?php endif; ?>
+
+        <!-- ================= 1. STANDARD EMAIL/USERNAME & PASSWORD SECTION ================= -->
+        <div id="passwordLoginSection" class="login-section-fade">
+          <form action="login.php" method="POST" id="passwordLoginForm">
+            <div class="form-field-group">
+              <label for="username" class="field-label">Email Address:</label>
+              <input
+                type="text"
+                id="username"
+                name="username"
+                class="warm-input"
+                placeholder="Enter email address or username"
+                value="<?= htmlspecialchars($submittedUsername, ENT_QUOTES, 'UTF-8') ?>"
+                autocomplete="username"
+                inputmode="email"
+                required
+                <?= $submittedUsername === '' ? 'autofocus' : '' ?>
+              >
+            </div>
+
+            <div class="form-field-group" style="margin-bottom: 0;">
+              <label for="password" class="field-label">Password:</label>
+              <div class="password-input-wrap">
+                <input
+                  type="password"
+                  id="password"
+                  name="password"
+                  class="warm-input warm-input-password"
+                  placeholder="Enter your password"
+                  autocomplete="current-password"
+                  required
+                  <?= $submittedUsername !== '' ? 'autofocus' : '' ?>
+                >
+                <button
+                  type="button"
+                  id="btnTogglePassword"
+                  class="password-toggle-btn"
+                  aria-label="Show password"
+                  aria-pressed="false"
+                  title="Show Password"
+                >
+                  <svg id="iconEyeShow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178Z"/>
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/>
+                  </svg>
+                  <svg id="iconEyeHide" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="display: none;">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M3.98 8.223A10.477 10.477 0 0 0 1.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.451 10.451 0 0 1 12 4.5c4.756 0 8.773 3.162 10.065 7.498a10.522 10.522 0 0 1-4.293 5.774M6.228 6.228 3 3m3.228 3.228 3.65 3.65m7.894 7.894L21 21m-3.228-3.228-3.65-3.65m0 0a3 3 0 1 0-4.243-4.243m4.242 4.242L9.88 9.88"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="forgot-password-wrapper">
+              <a href="forgot_password.php" class="forgot-password-link" title="Forgot Password?">Forgot Password?</a>
+            </div>
+
+            <div class="remember-row">
+              <label for="remember_me" class="remember-label">
+                <input
+                  type="checkbox"
+                  id="remember_me"
+                  name="remember_me"
+                  value="1"
+                  class="remember-checkbox"
+                  <?= $rememberChecked ? 'checked' : '' ?>
+                >
+                <span>Remember Me</span>
+              </label>
+            </div>
+
+            <div class="btn-center-wrap">
+              <button type="submit" class="btn-warm-pill">
+                <span>Sign In</span>
+              </button>
+            </div>
+          </form>
+
+          <!-- Divider -->
+          <div class="or-divider" role="separator" aria-label="or">
+            <span class="or-divider-line" aria-hidden="true"></span>
+            <span class="or-divider-text">OR</span>
+            <span class="or-divider-line" aria-hidden="true"></span>
+          </div>
+
+          <!-- Prominent "Use Face ID" Button below standard form -->
+          <div class="btn-center-wrap">
+            <button type="button" id="btnUseFaceId" class="btn-warm-pill">
+              <svg fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6.827 6.175A2.31 2.31 0 0 1 5.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 0 0-1.134-.175 2.31 2.31 0 0 1-1.64-1.055l-.822-1.316a2.192 2.192 0 0 0-1.736-1.039 48.774 48.774 0 0 0-5.232 0 2.192 2.192 0 0 0-1.736 1.039l-.821 1.316Z" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 12.75a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0ZM18.75 10.5h.008v.008h-.008V10.5Z" />
+              </svg>
+              <span>Use Face ID</span>
+            </button>
+          </div>
         </div>
 
-        <!-- Action Button: Cancel back to Password (NO manual capture/submit buttons) -->
-        <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 18px;">
-          <button type="button" id="btnCancelFaceId" class="clay-btn clay-btn-secondary clay-btn-full" onclick="switchToPasswordLogin()">
-            <span>Cancel / Use Password</span>
-          </button>
+        <!-- ================= 2. AUTOMATED FACE ID LOGIN SECTION ================= -->
+        <div id="faceIdSection" class="login-section-fade" style="display: none;">
+          <p class="face-scan-hint">
+            Look directly at the camera and blink or turn your head slightly to sign in automatically.
+          </p>
+
+          <!-- Mirrored Live Webcam Box with Oval Guide -->
+          <div class="face-cam-card gcash-kyc-cam">
+            <!-- Real-Time Anti-Spoofing / Liveness Warning Overlay Banner -->
+            <div id="faceSpoofWarningOverlay" class="face-spoof-warning" style="display: none; align-items: center; justify-content: center; gap: 8px;">
+              <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" style="color: #ffffff; width: 18px; height: 18px; flex-shrink: 0;">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m0-10.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.75c0 5.592 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.57-.598-3.75h-.002A11.959 11.959 0 0 1 12 2.964ZM12 15.75h.007v.008H12v-.008Z" />
+              </svg>
+              <span id="faceSpoofWarningText">Spoof detected: Please remove photos or screens from the camera.</span>
+            </div>
+
+            <!-- Live Webcam Feed (Mirrored via CSS) -->
+            <video id="faceWebcamVideo" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); -webkit-transform: scaleX(-1);"></video>
+
+            <!-- Hidden Canvas for Mirror Frame Capture -->
+            <canvas id="faceCaptureCanvas" style="display: none;"></canvas>
+
+            <!-- Semi-Transparent Dark Overlay across <video> with Transparent Oval Cutout in Center -->
+            <div class="gcash-camera-mask face-oval-guide" id="cameraDarkOverlay">
+              <div class="face-oval-ring" id="biometricOvalRing"></div>
+            </div>
+
+            <!-- Dynamic Visual Feedback Badge -->
+            <div class="face-status-pill" id="faceStatusPill">
+              <span id="faceStatusIcon">👀</span>
+              <span id="faceStatusText">Look directly at camera to start</span>
+            </div>
+          </div>
+
+          <!-- Timed Notification Alert Bar for Rejection / Error -->
+          <div id="faceLoginAlert" class="face-timed-alert" style="display: none;">
+            <div style="width: 30px; height: 30px; border-radius: 8px; background: rgba(168, 56, 43, 0.14); color: #8F251A; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 800; flex-shrink: 0;">
+              ✕
+            </div>
+            <div style="flex: 1;">
+              <div style="font-size: 13px; font-weight: 700; color: #7A1E15; line-height: 1.35;" id="faceLoginAlertMsg">
+                Face not recognized. Please try again or use your password.
+              </div>
+            </div>
+          </div>
+
+          <!-- Action Button: Cancel back to Password (NO manual capture/submit buttons) -->
+          <div style="margin-top: 16px;">
+            <button type="button" id="btnCancelFaceId" class="btn-warm-outline-pill">
+              <span>Cancel / Use Password</span>
+            </button>
+          </div>
         </div>
+
       </div>
+    </section>
 
-    </div>
-  </div>
+  </main>
 
   <!-- Vanilla JS Automated Face ID Login & Strict Anti-Spoofing Liveness Controller -->
   <script>
@@ -577,6 +420,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       document.getElementById('passwordLoginSection').style.display = 'none';
       document.getElementById('faceIdSection').style.display = 'block';
       document.getElementById('loginMainHeading').textContent = 'Face ID Login';
+      const subHeading = document.getElementById('loginSubHeading');
+      if (subHeading) subHeading.textContent = 'Verify your face to sign in automatically.';
 
       const passAlert = document.getElementById('passwordErrorAlert');
       if (passAlert) passAlert.style.display = 'none';
@@ -594,7 +439,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       stopFaceWebcam();
       document.getElementById('faceIdSection').style.display = 'none';
       document.getElementById('passwordLoginSection').style.display = 'block';
-      document.getElementById('loginMainHeading').textContent = 'Log in';
+      document.getElementById('loginMainHeading').textContent = 'Sign In';
+      const subHeading = document.getElementById('loginSubHeading');
+      if (subHeading) subHeading.textContent = 'Sign in to your account.';
       hideFaceLoginAlert();
       hideSpoofWarning();
       resetLivenessAntiSpoofingState();
@@ -1011,7 +858,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       triggerAutoFaceCapture('Automated physical movement detection');
     };
 
+    function toggleLoginPasswordVisibility() {
+      const passwordInput = document.getElementById('password');
+      const toggleBtn = document.getElementById('btnTogglePassword');
+      const eyeShow = document.getElementById('iconEyeShow');
+      const eyeHide = document.getElementById('iconEyeHide');
+      if (!passwordInput || !toggleBtn) return;
+
+      const isHidden = passwordInput.type === 'password';
+      passwordInput.type = isHidden ? 'text' : 'password';
+      toggleBtn.setAttribute('aria-pressed', isHidden ? 'true' : 'false');
+      toggleBtn.setAttribute('aria-label', isHidden ? 'Hide password' : 'Show password');
+      toggleBtn.title = isHidden ? 'Hide Password' : 'Show Password';
+
+      if (eyeShow) eyeShow.style.display = isHidden ? 'none' : 'block';
+      if (eyeHide) eyeHide.style.display = isHidden ? 'block' : 'none';
+    }
+
+    window.toggleLoginPasswordVisibility = toggleLoginPasswordVisibility;
+
     document.addEventListener('DOMContentLoaded', function() {
+      const btnTogglePwd = document.getElementById('btnTogglePassword');
+      if (btnTogglePwd) {
+        btnTogglePwd.addEventListener('click', toggleLoginPasswordVisibility);
+      }
+
       const btnUseFace = document.getElementById('btnUseFaceId');
       if (btnUseFace) {
         btnUseFace.addEventListener('click', function(e) {

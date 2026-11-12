@@ -29,6 +29,7 @@ if (!$freshUser || (int)($freshUser['is_active'] ?? 0) !== 1) {
     exit;
 }
 $user = $freshUser;
+$isTenantVerified = AccessControl::isUserVerifiedRow($user);
 
 // Resolve user avatar image URL dynamically from database record or uploaded avatar
 $userAvatarUrl = '';
@@ -400,6 +401,90 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
       position: relative;
       z-index: 50;
     }
+
+    /* Unverified Tenant Read-Only Banner & Locked Controls (Purple / Beige Theme) */
+    .unverified-readonly-banner {
+      margin-bottom: 24px;
+      padding: 18px 22px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+      border-radius: var(--radius-xl);
+      border: 1.5px solid #d8b4fe;
+      background: linear-gradient(135deg, #fbf7f0 0%, #f5f0ff 55%, #ede9fe 100%);
+      box-shadow: 0 10px 24px -8px rgba(109, 40, 217, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+    }
+    .unverified-readonly-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, #ede9fe, #f3e8d8);
+      color: #6d28d9;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      flex-shrink: 0;
+      border: 1px solid #d8b4fe;
+      box-shadow: var(--clay-button-shadow);
+    }
+    .unverified-readonly-cta {
+      padding: 10px 20px;
+      font-size: 13px;
+      font-weight: 800;
+      background: linear-gradient(135deg, #7c3aed, #6d28d9);
+      color: #ffffff;
+      border: none;
+      border-radius: 12px;
+      box-shadow: 0 6px 14px rgba(109, 40, 217, 0.28);
+      cursor: pointer;
+      transition: transform 0.16s ease, box-shadow 0.16s ease;
+    }
+    .unverified-readonly-cta:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 8px 18px rgba(109, 40, 217, 0.36);
+    }
+    .unverified-inline-strip {
+      margin-top: 14px;
+      margin-bottom: 14px;
+      padding: 12px 16px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, #fbf7f0 0%, #f5f0ff 100%);
+      border: 1.5px solid #d8b4fe;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .clay-btn-locked {
+      background: #e2e8f0 !important;
+      color: #475569 !important;
+      border: 1.5px dashed #94a3b8 !important;
+      box-shadow: none !important;
+      opacity: 0.78 !important;
+      cursor: not-allowed !important;
+    }
+    .clay-btn-locked:hover {
+      transform: none !important;
+      box-shadow: none !important;
+    }
+    .readonly-dropzone-locked {
+      opacity: 0.65;
+      cursor: not-allowed !important;
+      background: linear-gradient(135deg, #f8fafc, #f5f0ff) !important;
+      border-color: #cbd5e1 !important;
+    }
+    @keyframes verifyCardPulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(124, 58, 237, 0); }
+      50% { box-shadow: 0 0 0 6px rgba(124, 58, 237, 0.25); }
+    }
+    .verify-highlight-pulse {
+      animation: verifyCardPulse 1.1s ease 2;
+      border-radius: var(--radius-lg);
+    }
   </style>
 </head>
 <body>
@@ -605,29 +690,37 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
           </div>
         </div>
 
-        <!-- Clean & Minimal Dashboard Verification Warning Banner (Soft Red Claymorphism Style) -->
-        <?php if (($user['verification_status'] ?? 'unverified') !== 'verified' && ($user['verification_status'] ?? '') !== 'pending'): ?>
-        <div class="alert-clay alert-clay-danger verification-dashboard-warning" style="margin-bottom: 24px; padding: 16px 22px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; border-radius: var(--radius-xl); border: 2px solid #fecdd3; background: #fff1f2; box-shadow: var(--clay-card-shadow);">
-          <div style="display: flex; align-items: center; gap: 14px;">
-            <div style="width: 42px; height: 42px; border-radius: 14px; background: #ffe4e6; color: #e11d48; display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0; box-shadow: var(--clay-button-shadow);">
-              ⚠️
+        <!-- Read-Only Access Notice Banner for Unverified Tenant Accounts (Purple / Beige Theme) -->
+        <?php if (!$isTenantVerified): ?>
+        <div class="unverified-readonly-banner verification-dashboard-warning" id="readonlyVerificationBanner">
+          <div style="display: flex; align-items: center; gap: 14px; flex: 1; min-width: 240px;">
+            <div class="unverified-readonly-icon">
+              🔒
             </div>
             <div>
-              <h4 style="font-size: 15px; font-weight: 800; color: #9f1239; margin: 0 0 3px 0;">Please verify your account</h4>
-              <p style="font-size: 13px; color: #881337; margin: 0; line-height: 1.4;">Submit a valid government-issued ID to activate all tenant features.</p>
+              <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px;">
+                <h4 style="font-size: 15px; font-weight: 800; color: #3b0764; margin: 0;">Account Verification Required — Read-Only Access</h4>
+                <?php if (($user['verification_status'] ?? '') === 'pending'): ?>
+                  <span class="clay-badge" style="background: #fef3c7; color: #92400e; font-size: 11px; font-weight: 800; padding: 3px 9px;">⏳ Pending Review</span>
+                <?php elseif (($user['verification_status'] ?? '') === 'rejected'): ?>
+                  <span class="clay-badge" style="background: #ffe4e6; color: #be123c; font-size: 11px; font-weight: 800; padding: 3px 9px;">✕ Needs Re-Verification</span>
+                <?php else: ?>
+                  <span class="clay-badge" style="background: #ede9fe; color: #5b21b6; font-size: 11px; font-weight: 800; padding: 3px 9px;">Read-Only Mode</span>
+                <?php endif; ?>
+              </div>
+              <p style="font-size: 13px; color: #4c1d95; margin: 0; line-height: 1.45; font-weight: 600;">
+                Your account is not yet verified. You can view your account information, but some features are temporarily unavailable until your account has been verified.
+              </p>
+              <?php if (($user['verification_status'] ?? '') === 'pending'): ?>
+                <p style="font-size: 12px; color: #6b21a8; margin: 4px 0 0 0;">
+                  Uploaded ID: <strong><?= htmlspecialchars($user['id_type'] ?? 'ID document') ?></strong> is awaiting review / live face scan completion.
+                </p>
+              <?php endif; ?>
             </div>
           </div>
-          <button type="button" class="clay-btn clay-btn-primary" style="padding: 10px 22px; font-size: 13px; background: linear-gradient(135deg, #f43f5e, #e11d48); box-shadow: 4px 4px 12px rgba(225, 29, 72, 0.35);" onclick="openProfileView('accountInfo')">
-            <span>Verify Account →</span>
+          <button type="button" class="unverified-readonly-cta" onclick="goToAccountVerification()">
+            <span><?= ($user['verification_status'] ?? '') === 'pending' ? 'Complete Verification →' : 'Verify Account →' ?></span>
           </button>
-        </div>
-        <?php elseif (($user['verification_status'] ?? '') === 'pending'): ?>
-        <div class="alert-clay alert-clay-info" style="margin-bottom: 24px; padding: 16px 20px;">
-          <div class="alert-icon-clay">⏳</div>
-          <div class="alert-body-clay">
-            <h4>ID Verification Under Review</h4>
-            <p>Your uploaded <strong><?= htmlspecialchars($user['id_type'] ?? 'ID document') ?></strong> is currently under review by the landlord.</p>
-          </div>
         </div>
         <?php endif; ?>
 
@@ -786,6 +879,15 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
               </div>
             </div>
 
+            <?php if (!$isTenantVerified): ?>
+            <div class="unverified-inline-strip">
+              <div style="font-size: 12.5px; color: #4c1d95; font-weight: 700; line-height: 1.4;">
+                🔒 <strong>Read-Only Mode:</strong> Submitting new maintenance tickets is disabled until your account is verified. You can still view your ticket history.
+              </div>
+              <button type="button" class="unverified-readonly-cta" style="padding: 7px 14px; font-size: 12px;" onclick="goToAccountVerification()">Verify Account →</button>
+            </div>
+            <?php endif; ?>
+
             <form id="maintenanceForm" style="margin-top: 18px;">
               <div class="form-group">
                 <label for="ticketTitle" class="form-label">Issue Title <span class="req">*</span></label>
@@ -829,24 +931,30 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
                   <span>Attach Photos of Item Needing Repair (Optional)</span>
                   <span style="font-size: 11.5px; color: var(--text-muted); font-weight: 500;">JPG, PNG, WEBP</span>
                 </label>
-                <div class="file-upload-wrapper" style="position: relative;">
-                  <input type="file" id="ticketPhotos" name="maintenance_photos[]" accept="image/*" multiple style="position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; z-index: 5;">
-                  <label for="ticketPhotos" class="clay-btn clay-btn-secondary" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 11px 16px; cursor: pointer;">
+                <div class="file-upload-wrapper" style="position: relative;" <?= !$isTenantVerified ? 'onclick="showFeatureLockedAlert(\'attach maintenance photos\')"' : '' ?>>
+                  <input type="file" id="ticketPhotos" name="maintenance_photos[]" accept="image/*" multiple <?= !$isTenantVerified ? 'disabled' : '' ?> style="position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: <?= !$isTenantVerified ? 'not-allowed' : 'pointer' ?>; z-index: 5;">
+                  <label for="ticketPhotos" class="clay-btn clay-btn-secondary<?= !$isTenantVerified ? ' clay-btn-locked' : '' ?>" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 11px 16px; cursor: <?= !$isTenantVerified ? 'not-allowed' : 'pointer' ?>;">
                     <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-700">
                       <path stroke-linecap="round" stroke-linejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
                     </svg>
-                    <span id="ticketPhotosUploadLabel" style="font-size: 13px; font-weight: 700; color: #475569;">Attach Photos of Item</span>
+                    <span id="ticketPhotosUploadLabel" style="font-size: 13px; font-weight: 700; color: #475569;"><?= !$isTenantVerified ? '🔒 Attach Photos (Verification Required)' : 'Attach Photos of Item' ?></span>
                   </label>
                 </div>
                 <div id="ticketPhotosPreview" style="display: none; margin-top: 10px; gap: 8px; flex-wrap: wrap;"></div>
               </div>
 
+              <?php if ($isTenantVerified): ?>
               <button type="submit" class="clay-btn clay-btn-primary clay-btn-full" id="btnLogTicket" style="display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 16px;">
                 <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6" style="color: #ffffff;">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M11.42 15.17 17.25 21A2.652 2.652 0 0 0 21 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 1 1-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.14a4.5 4.5 0 0 0 4.486-6.32l-3.276 3.277a3.004 3.004 0 0 1-2.25 2.25l-3.276-3.276a4.5 4.5 0 0 0-6.32 4.486c.048.58.072 1.193-.092 1.743" />
                 </svg>
                 <span>Dispatch Maintenance Ticket</span>
               </button>
+              <?php else: ?>
+              <button type="button" class="clay-btn clay-btn-locked clay-btn-full" id="btnLogTicket" aria-disabled="true" onclick="showFeatureLockedAlert('submit maintenance tickets')" style="display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 16px;">
+                <span>🔒 Dispatch Maintenance Ticket (Verification Required)</span>
+              </button>
+              <?php endif; ?>
             </form>
           </div>
 
@@ -917,6 +1025,15 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
               </div>
               <span class="widget-badge">Secure Ledger</span>
             </div>
+
+            <?php if (!$isTenantVerified): ?>
+            <div class="unverified-inline-strip">
+              <div style="font-size: 12.5px; color: #4c1d95; font-weight: 700; line-height: 1.4;">
+                🔒 <strong>Read-Only Mode:</strong> You can view billing balances and receipts, but submitting payment confirmations requires account verification.
+              </div>
+              <button type="button" class="unverified-readonly-cta" style="padding: 7px 14px; font-size: 12px;" onclick="goToAccountVerification()">Verify Account →</button>
+            </div>
+            <?php endif; ?>
 
             <!-- Payment Obligations Overview: Advance Deposit & Monthly Rent -->
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin-top: 14px; margin-bottom: 18px;">
@@ -997,8 +1114,8 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
             </div>
 
             <!-- Clay Drop-Zone -->
-            <div class="clay-dropzone" id="receiptDropZone">
-              <input type="file" id="receiptFileInput" class="dropzone-input" accept=".pdf,.png,.jpg,.jpeg,.webp">
+            <div class="clay-dropzone<?= !$isTenantVerified ? ' readonly-dropzone-locked' : '' ?>" id="receiptDropZone">
+              <input type="file" id="receiptFileInput" class="dropzone-input" accept=".pdf,.png,.jpg,.jpeg,.webp" <?= !$isTenantVerified ? 'disabled' : '' ?>>
               <div class="dropzone-icon">📄</div>
               <h3 class="dropzone-title">Drag &amp; drop rent receipt here</h3>
               <p class="dropzone-desc">or <strong>click to browse device</strong></p>
@@ -1029,7 +1146,11 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
               </div>
             </div>
 
-            <?php if ($currentPayment && $currentPayment['status'] === 'pending_setup'): ?>
+            <?php if (!$isTenantVerified): ?>
+            <button type="button" class="clay-btn clay-btn-locked clay-btn-full" id="btnUploadReceipt" aria-disabled="true" style="margin-top: 20px;">
+              <span>🔒 Submit Rent Payment Proof (Verification Required)</span>
+            </button>
+            <?php elseif ($currentPayment && $currentPayment['status'] === 'pending_setup'): ?>
             <button type="button" class="clay-btn clay-btn-disabled clay-btn-full" disabled style="margin-top: 20px; opacity: 0.65; cursor: not-allowed; background: #94a3b8; color: #fff; box-shadow: none;">
               <span>🔒 Rent Setup in Progress — Payment Disabled</span>
             </button>
@@ -1092,7 +1213,11 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
                     <?php elseif ($py['status'] === 'unpaid'): ?>
                       <div style="display: flex; align-items: center; gap: 6px;">
                         <span class="clay-badge" style="background: #fee2e2; color: #991b1b; font-weight: 700; border: 1px solid rgba(239, 68, 68, 0.3); font-size: 11px;">UNPAID</span>
-                        <button type="button" class="clay-btn clay-btn-primary" style="padding: 4px 10px; font-size: 11px; font-weight: 700; border-radius: 6px;" onclick="selectBillToPay(<?= (int)$py['id'] ?>)">Pay</button>
+                        <?php if ($isTenantVerified): ?>
+                          <button type="button" class="clay-btn clay-btn-primary" style="padding: 4px 10px; font-size: 11px; font-weight: 700; border-radius: 6px;" onclick="selectBillToPay(<?= (int)$py['id'] ?>)">Pay</button>
+                        <?php else: ?>
+                          <button type="button" class="clay-btn clay-btn-locked" aria-disabled="true" style="padding: 4px 10px; font-size: 11px; font-weight: 700; border-radius: 6px;" onclick="showFeatureLockedAlert('submit payments')">🔒 Pay</button>
+                        <?php endif; ?>
                       </div>
                     <?php else: ?>
                       <span class="clay-badge badge-<?= strtolower($py['status']) ?>">
@@ -1149,9 +1274,15 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
                     <p class="clay-card-subtitle">Personal records and unit assignment details</p>
                   </div>
                   <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                    <?php if ($isTenantVerified): ?>
                     <button type="button" class="clay-btn clay-btn-secondary" style="padding: 7px 16px; font-size: 12.5px;" onclick="openEditAccountInfoModal()">
                       ✏️ Edit Information
                     </button>
+                    <?php else: ?>
+                    <button type="button" class="clay-btn clay-btn-locked" aria-disabled="true" style="padding: 7px 16px; font-size: 12.5px;" onclick="showFeatureLockedAlert('edit account information')">
+                      🔒 Edit Information
+                    </button>
+                    <?php endif; ?>
                     <?php if (($user['verification_status'] ?? 'unverified') !== 'verified'): ?>
                       <?php if (($user['verification_status'] ?? '') === 'pending'): ?>
                         <span class="clay-badge badge-pending" style="font-size: 13px; padding: 7px 16px;">
@@ -1179,12 +1310,18 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
                     <p style="margin: 0 0 14px 0; font-size: 13px; color: #64748b; line-height: 1.4;">
                       Upload a customized profile photo (JPG, PNG, or WEBP up to 5MB). If removed, your profile reverts to your initial icon.
                     </p>
-                    <input type="file" id="profilePictureInput" accept="image/jpeg,image/png,image/webp" style="display: none;" onchange="handleProfilePictureSelected(event)">
+                    <input type="file" id="profilePictureInput" accept="image/jpeg,image/png,image/webp" style="display: none;" onchange="handleProfilePictureSelected(event)" <?= !$isTenantVerified ? 'disabled' : '' ?>>
                     
                     <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                      <?php if ($isTenantVerified): ?>
                       <button type="button" class="clay-btn clay-btn-primary" style="padding: 7px 16px; font-size: 13px; display: inline-flex; align-items: center; gap: 6px;" onclick="document.getElementById('profilePictureInput').click()">
                         <i data-lucide="camera" style="width: 15px; height: 15px;"></i> Choose Photo
                       </button>
+                      <?php else: ?>
+                      <button type="button" class="clay-btn clay-btn-locked" aria-disabled="true" style="padding: 7px 16px; font-size: 13px; display: inline-flex; align-items: center; gap: 6px;" onclick="showFeatureLockedAlert('update your profile picture')">
+                        🔒 Choose Photo
+                      </button>
+                      <?php endif; ?>
 
                       <div id="avatarPendingActions" style="display: none; align-items: center; gap: 8px;">
                         <button type="button" class="clay-btn btn-success" id="btnSaveAvatar" style="padding: 7px 16px; font-size: 13px; background: #10b981; color: #fff; border: none; border-radius: 10px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;" onclick="submitProfilePictureUpload()">
@@ -1195,8 +1332,8 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
                         </button>
                       </div>
 
-                      <button type="button" class="clay-btn" id="btnRemoveAvatar" style="padding: 7px 14px; font-size: 13px; color: #ef4444; background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 10px; cursor: pointer; display: <?= !empty($userAvatarUrl) ? 'inline-flex' : 'none' ?>; align-items: center; gap: 6px;" onclick="confirmRemoveProfilePicture()">
-                        <i data-lucide="trash-2" style="width: 15px; height: 15px;"></i> Remove Photo
+                      <button type="button" class="clay-btn<?= !$isTenantVerified ? ' clay-btn-locked' : '' ?>" id="btnRemoveAvatar" <?= !$isTenantVerified ? 'aria-disabled="true"' : '' ?> style="padding: 7px 14px; font-size: 13px; color: #ef4444; background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 10px; cursor: pointer; display: <?= !empty($userAvatarUrl) ? 'inline-flex' : 'none' ?>; align-items: center; gap: 6px;" onclick="confirmRemoveProfilePicture()">
+                        <?= !$isTenantVerified ? '🔒 Remove Photo' : '<i data-lucide="trash-2" style="width: 15px; height: 15px;"></i> Remove Photo' ?>
                       </button>
                     </div>
                   </div>
@@ -1249,7 +1386,7 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
 
                 <?php if (($user['verification_status'] ?? 'unverified') !== 'verified'): ?>
                 <!-- Verification Action / Status Container -->
-                <div style="margin-top: 24px; padding-top: 20px; border-top: 2px dashed rgba(166, 180, 204, 0.4);">
+                <div id="accountVerificationSection" style="margin-top: 24px; padding-top: 20px; border-top: 2px dashed rgba(166, 180, 204, 0.4);">
                   <?php if (($user['verification_status'] ?? 'unverified') === 'unverified'): ?>
                     <div style="background: #fff1f2; border: 1.5px solid #fecdd3; border-radius: var(--radius-lg); padding: 18px 22px;">
                       <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px;">
@@ -1329,6 +1466,15 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
                   <p class="clay-card-subtitle">Keep your account secure by updating your password regularly</p>
                 </div>
 
+                <?php if (!$isTenantVerified): ?>
+                <div class="unverified-inline-strip" style="margin-top: 0; margin-bottom: 18px;">
+                  <div style="font-size: 12.5px; color: #4c1d95; font-weight: 700; line-height: 1.4;">
+                    🔒 <strong>Verification Required:</strong> Password updates are locked until your account verification is completed.
+                  </div>
+                  <button type="button" class="unverified-readonly-cta" style="padding: 7px 14px; font-size: 12px;" onclick="goToAccountVerification()">Verify Account →</button>
+                </div>
+                <?php endif; ?>
+
                 <form id="changePasswordForm">
                   <div class="form-group">
                     <label class="form-label" for="profCurrentPass">Current Password <span class="req">*</span></label>
@@ -1346,9 +1492,15 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
                   </div>
 
                   <div style="margin-top: 24px;">
+                    <?php if ($isTenantVerified): ?>
                     <button type="submit" class="clay-btn clay-btn-primary" id="btnSavePassword" style="min-width: 180px;">
                       Update Password
                     </button>
+                    <?php else: ?>
+                    <button type="button" class="clay-btn clay-btn-locked" id="btnSavePassword" aria-disabled="true" style="min-width: 180px;" onclick="showFeatureLockedAlert('change your password')">
+                      🔒 Update Password (Verification Required)
+                    </button>
+                    <?php endif; ?>
                   </div>
                 </form>
               </div>
@@ -1412,6 +1564,40 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
           <button type="submit" class="clay-btn clay-btn-primary" id="btnSaveAccountInfo" style="flex: 2;">Save Information</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       MODAL: ACCOUNT VERIFICATION REQUIRED (READ-ONLY ACCESS ALERT)
+       ===================================================================== -->
+  <div class="modal-backdrop" id="featureLockedModal" onclick="if (event.target === this) closeFeatureLockedModal();">
+    <div class="clay-modal" style="max-width: 470px; border: 1.5px solid #d8b4fe; background: linear-gradient(180deg, #fffdf9 0%, #f8f5ff 100%);">
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px;">
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <div class="unverified-readonly-icon">🔒</div>
+          <div>
+            <h2 style="font-size: 18px; font-weight: 800; color: #3b0764; margin: 0;">Account Verification Required</h2>
+            <p style="font-size: 12px; color: #6b21a8; margin: 2px 0 0 0; font-weight: 600;">Read-Only Tenant Account Restriction</p>
+          </div>
+        </div>
+        <button type="button" class="btn-remove-file" onclick="closeFeatureLockedModal()" title="Close">✕</button>
+      </div>
+
+      <div style="background: rgba(255, 255, 255, 0.85); border: 1px solid #e9d5ff; border-radius: 14px; padding: 14px 16px; margin-bottom: 16px;">
+        <p id="featureLockedMessage" style="margin: 0; font-size: 13.5px; font-weight: 700; color: #3b0764; line-height: 1.5;">
+          This feature is currently unavailable. Please complete your account verification to access this functionality.
+        </p>
+        <p style="margin: 8px 0 0 0; font-size: 12px; color: #64748b; line-height: 1.45;">
+          You can continue browsing your profile, unit information, billing history, announcements, maintenance tickets, and notifications in read-only mode.
+        </p>
+      </div>
+
+      <div style="display: flex; gap: 10px;">
+        <button type="button" class="clay-btn clay-btn-secondary" style="flex: 1;" onclick="closeFeatureLockedModal()">Close</button>
+        <button type="button" class="unverified-readonly-cta" style="flex: 1.5; padding: 11px 16px;" onclick="closeFeatureLockedModal(); goToAccountVerification();">
+          Complete Verification →
+        </button>
+      </div>
     </div>
   </div>
 
@@ -1920,7 +2106,61 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
     let userDefaultInitial = <?= json_encode($userInitial) ?>;
     let pendingAvatarFile = null;
 
+    const IS_TENANT_VERIFIED = <?= $isTenantVerified ? 'true' : 'false' ?>;
+    const VERIFICATION_LOCKED_MSG = 'This feature is currently unavailable. Please complete your account verification to access this functionality.';
+
+    function showFeatureLockedAlert(featureLabel = '', customMessage = '') {
+      const msg = customMessage || VERIFICATION_LOCKED_MSG;
+      const msgEl = document.getElementById('featureLockedMessage');
+      if (msgEl) {
+        msgEl.textContent = msg;
+      }
+      const modal = document.getElementById('featureLockedModal');
+      if (modal) {
+        modal.style.display = 'flex';
+        modal.classList.add('open');
+        modal.style.pointerEvents = 'auto';
+      } else {
+        showToast(msg, 'warning', 5500);
+      }
+    }
+
+    function closeFeatureLockedModal() {
+      const modal = document.getElementById('featureLockedModal');
+      if (modal) {
+        modal.classList.remove('open');
+        modal.style.display = 'none';
+        modal.style.pointerEvents = 'none';
+      }
+    }
+
+    function goToAccountVerification() {
+      openProfileView('accountInfo');
+      setTimeout(() => {
+        const target = document.getElementById('accountVerificationSection') || document.getElementById('btnVerifyAccount');
+        if (target) {
+          target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          target.classList.remove('verify-highlight-pulse');
+          void target.offsetWidth;
+          target.classList.add('verify-highlight-pulse');
+        }
+      }, 150);
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' || e.keyCode === 27) {
+        if (document.getElementById('featureLockedModal')?.classList.contains('open')) {
+          closeFeatureLockedModal();
+        }
+      }
+    });
+
     function handleProfilePictureSelected(e) {
+      if (!IS_TENANT_VERIFIED) {
+        if (e && e.target) e.target.value = '';
+        showFeatureLockedAlert('update your profile picture');
+        return;
+      }
       const file = e.target.files && e.target.files[0];
       if (!file) return;
 
@@ -1993,6 +2233,10 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
     }
 
     function submitProfilePictureUpload() {
+      if (!IS_TENANT_VERIFIED) {
+        showFeatureLockedAlert('update your profile picture');
+        return;
+      }
       if (!pendingAvatarFile) {
         showToast('Please select a photo first.', 'warning');
         return;
@@ -2073,6 +2317,10 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
     }
 
     function confirmRemoveProfilePicture() {
+      if (!IS_TENANT_VERIFIED) {
+        showFeatureLockedAlert('remove your profile picture');
+        return;
+      }
       if (!confirm('Are you sure you want to remove your profile picture and revert to the default circular initial icon?')) {
         return;
       }
@@ -2140,6 +2388,10 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
 
     // Edit Account Information Modal Controls
     function openEditAccountInfoModal() {
+      if (!IS_TENANT_VERIFIED) {
+        showFeatureLockedAlert('edit your account information');
+        return;
+      }
       const modal = document.getElementById('editAccountInfoModal');
       if (modal) {
         modal.style.display = 'flex';
@@ -3772,6 +4024,10 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
         if (passForm) {
           passForm.addEventListener('submit', async (e) => {
             e.preventDefault();
+            if (!IS_TENANT_VERIFIED) {
+              showFeatureLockedAlert('change your password');
+              return;
+            }
             const currentPassEl = document.getElementById('profCurrentPass');
             const newPassEl = document.getElementById('profNewPass');
             const confirmPassEl = document.getElementById('profConfirmPass');
@@ -3815,6 +4071,8 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
                 setTimeout(() => {
                   window.location.href = 'tenant_portal.php?section=tenantProfile&tab=changePassword';
                 }, 1000);
+              } else if (res.status === 403 && data.code === 'ACCOUNT_NOT_VERIFIED') {
+                showFeatureLockedAlert('change your password', data.message);
               } else {
                 showToast(data.message || 'Error updating password', 'error');
               }
@@ -3838,6 +4096,11 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
         if (editInfoForm) {
           editInfoForm.addEventListener('submit', async (e) => {
             e.preventDefault();
+            if (!IS_TENANT_VERIFIED) {
+              closeEditAccountInfoModal();
+              showFeatureLockedAlert('edit account information');
+              return;
+            }
             const btn = document.getElementById('btnSaveAccountInfo');
             if (btn) {
               btn.disabled = true;
@@ -3867,6 +4130,9 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
                 setTimeout(() => {
                   window.location.href = 'tenant_portal.php?section=tenantProfile&tab=accountInfo';
                 }, 1000);
+              } else if (res.status === 403 && result.code === 'ACCOUNT_NOT_VERIFIED') {
+                closeEditAccountInfoModal();
+                showFeatureLockedAlert('edit account information', result.message);
               } else {
                 showToast(result.message || 'Error updating account information', 'error');
               }
@@ -3944,6 +4210,10 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
         if (maintForm) {
           maintForm.addEventListener('submit', async (e) => {
             e.preventDefault();
+            if (!IS_TENANT_VERIFIED) {
+              showFeatureLockedAlert('submit maintenance tickets');
+              return;
+            }
             const titleEl = document.getElementById('ticketTitle');
             const descEl = document.getElementById('ticketDesc');
             const catEl = document.getElementById('ticketCategory');
@@ -3988,6 +4258,8 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
                 }
                 // Remain on Maintenance section: dynamically update tickets list so new ticket is instantly visible
                 loadTenantTickets();
+              } else if (res.status === 403 && result.code === 'ACCOUNT_NOT_VERIFIED') {
+                showFeatureLockedAlert('submit maintenance tickets', result.message);
               } else {
                 showToast(result.message || 'Error logging ticket', 'error');
               }
@@ -4017,6 +4289,10 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
 
         if (dropZone && fileInput) {
           dropZone.addEventListener('click', (e) => {
+            if (!IS_TENANT_VERIFIED) {
+              showFeatureLockedAlert('submit payment confirmations');
+              return;
+            }
             if (isRentPendingSetup) {
               showToast('Your rent details are being configured by the Owner. Payment submission is disabled at this time.', 'error');
               return;
@@ -4026,12 +4302,17 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
 
           ['dragenter', 'dragover'].forEach(n => dropZone.addEventListener(n, (e) => {
             e.preventDefault();
+            if (!IS_TENANT_VERIFIED) return;
             dropZone.classList.add('drag-over');
           }));
 
           ['dragleave', 'drop'].forEach(n => dropZone.addEventListener(n, (e) => {
             e.preventDefault();
             dropZone.classList.remove('drag-over');
+            if (n === 'drop' && !IS_TENANT_VERIFIED) {
+              showFeatureLockedAlert('submit payment confirmations');
+              return;
+            }
             if (n === 'drop' && isRentPendingSetup) {
               showToast('Your rent details are being configured by the Owner. Payment submission is disabled at this time.', 'error');
               return;
@@ -4039,10 +4320,16 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
           }));
 
           dropZone.addEventListener('drop', (e) => {
+            if (!IS_TENANT_VERIFIED) return;
             if (e.dataTransfer && e.dataTransfer.files.length > 0) handleFile(e.dataTransfer.files[0]);
           });
 
           fileInput.addEventListener('change', () => {
+            if (!IS_TENANT_VERIFIED) {
+              fileInput.value = '';
+              showFeatureLockedAlert('submit payment confirmations');
+              return;
+            }
             if (fileInput.files && fileInput.files.length > 0) handleFile(fileInput.files[0]);
           });
         }
@@ -4058,6 +4345,10 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
 
         if (btnUploadReceipt) {
           btnUploadReceipt.addEventListener('click', async () => {
+            if (!IS_TENANT_VERIFIED) {
+              showFeatureLockedAlert('submit payment confirmations');
+              return;
+            }
             if (!attachedFile) {
               showToast('Please attach or drop a payment receipt first.', 'error');
               return;
@@ -4108,6 +4399,11 @@ $myTotalMonthlyRent = (float)$unit['monthly_rent'] + $myAdditionalFee;
                 setTimeout(() => {
                   window.location.href = 'tenant_portal.php?section=tenantPayments';
                 }, 900);
+              } else if (res.status === 403 && result.code === 'ACCOUNT_NOT_VERIFIED') {
+                if (progressWrapper) progressWrapper.style.display = 'none';
+                btnUploadReceipt.disabled = false;
+                btnUploadReceipt.innerHTML = '<span>🔒 Submit Rent Payment Proof (Verification Required)</span>';
+                showFeatureLockedAlert('submit payment confirmations', result.message);
               } else {
                 showToast(result.message || 'Error uploading receipt', 'error');
                 btnUploadReceipt.disabled = false;

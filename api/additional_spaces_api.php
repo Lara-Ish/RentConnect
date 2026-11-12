@@ -123,6 +123,7 @@ try {
         // Action: RENT SPACE (Tenant initiates or Admin assigns)
         // ---------------------------------------------------------------------
         if ($action === 'rent_space') {
+            AccessControl::requireVerifiedTenantJson($pdo, $currentUser);
             $spaceId = (int)($input['space_id'] ?? 0);
             if ($spaceId <= 0) {
                 http_response_code(422);
@@ -321,6 +322,7 @@ try {
         // Action: CANCEL SPACE RENTAL (Tenant stops rental or Admin releases)
         // ---------------------------------------------------------------------
         if ($action === 'cancel_space') {
+            AccessControl::requireVerifiedTenantJson($pdo, $currentUser);
             $spaceId = (int)($input['space_id'] ?? 0);
             if ($spaceId <= 0) {
                 http_response_code(422);

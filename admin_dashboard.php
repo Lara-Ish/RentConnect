@@ -447,6 +447,47 @@ $pendingReviewCount = count($pendingReviewPayments);
       transform: scale(1) translateY(0);
       opacity: 1;
     }
+
+    /* Animated Owner Password Confirmation Modal for Tenant Deletion */
+    #ownerDeleteConfirmModal {
+      display: flex !important;
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.65);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      z-index: 10050;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transition: opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.22s ease;
+    }
+    #ownerDeleteConfirmModal.open,
+    #ownerDeleteConfirmModal.active {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+    }
+    #ownerDeleteConfirmModal .owner-delete-modal-box {
+      width: 100%;
+      max-width: 480px;
+      background: var(--clay-card-bg, #ffffff);
+      border-radius: var(--radius-xl, 20px);
+      box-shadow: 0 24px 55px -12px rgba(225, 29, 72, 0.28), 0 10px 25px -5px rgba(15, 23, 42, 0.2);
+      border: 1.5px solid rgba(254, 205, 211, 0.9);
+      padding: 26px;
+      transform: scale(0.92) translateY(14px);
+      opacity: 0;
+      transition: transform 0.24s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.2s ease;
+    }
+    #ownerDeleteConfirmModal.open .owner-delete-modal-box,
+    #ownerDeleteConfirmModal.active .owner-delete-modal-box {
+      transform: scale(1) translateY(0);
+      opacity: 1;
+    }
   </style>
 </head>
 <body>
@@ -2345,6 +2386,80 @@ $pendingReviewCount = count($pendingReviewPayments);
       </div>
     </div>
   </div>
+
+  <!-- =====================================================================
+       MODAL: OWNER PASSWORD CONFIRMATION FOR TENANT DELETION
+       ===================================================================== -->
+  <div class="modal-backdrop" id="ownerDeleteConfirmModal" onclick="handleOwnerDeleteBackdropClick(event)">
+    <div class="owner-delete-modal-box" onclick="event.stopPropagation()">
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 16px;">
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <div style="width: 44px; height: 44px; border-radius: 14px; background: linear-gradient(135deg, #ffe4e6, #fecdd3); color: #be123c; display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0; box-shadow: var(--clay-button-shadow);">
+            🔐
+          </div>
+          <div>
+            <h2 id="ownerDeleteModalTitle" style="font-size: 18px; font-weight: 800; color: #0f172a; margin: 0; line-height: 1.25;">Confirm Tenant Account Deletion</h2>
+            <p style="font-size: 12.5px; color: var(--text-muted); margin: 2px 0 0 0;">Owner password verification is required before proceeding</p>
+          </div>
+        </div>
+        <button type="button" class="btn-remove-file" onclick="closeOwnerDeleteConfirmModal()" title="Close (Esc)" style="cursor: pointer; font-size: 18px; padding: 4px 8px; border-radius: 8px; border: none; background: transparent; color: var(--text-muted);">✕</button>
+      </div>
+
+      <!-- Target Tenant Context Box -->
+      <div id="ownerDeleteTenantCard" style="background: var(--clay-input-bg); border: 1px solid rgba(166, 180, 204, 0.35); border-radius: 12px; padding: 12px 14px; margin-bottom: 14px;">
+        <div style="font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-muted); margin-bottom: 4px;">Target Tenant Account</div>
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;">
+          <span id="ownerDeleteTargetName" style="font-size: 15px; font-weight: 800; color: #0f172a;">Tenant Name</span>
+          <span id="ownerDeleteTargetMeta" class="clay-badge" style="background: #e2e8f0; color: #334155; font-size: 11px; font-weight: 700;">ID #0</span>
+        </div>
+      </div>
+
+      <!-- Permanent Action Warning -->
+      <div style="background: #fff1f2; border: 1.5px solid #fecdd3; border-radius: 12px; padding: 12px 14px; margin-bottom: 16px; display: flex; align-items: flex-start; gap: 10px;">
+        <span style="font-size: 17px; line-height: 1.2; flex-shrink: 0;">⚠️</span>
+        <p id="ownerDeleteWarningText" style="margin: 0; font-size: 12.5px; color: #881337; line-height: 1.45; font-weight: 600;">
+          Deleting this tenant account is a permanent action and cannot be undone.
+        </p>
+      </div>
+
+      <form id="ownerDeleteConfirmForm" onsubmit="event.preventDefault(); executeVerifiedTenantDeletion();">
+        <div class="form-group" style="margin-bottom: 12px;">
+          <label class="form-label" for="ownerDeletePasswordInput">Owner Account Password <span class="req">*</span></label>
+          <div style="position: relative; display: flex; align-items: center;">
+            <input type="password"
+                   id="ownerDeletePasswordInput"
+                   name="owner_password"
+                   class="clay-input"
+                   placeholder="Enter your current owner password"
+                   autocomplete="current-password"
+                   required
+                   style="padding-right: 46px;"
+                   oninput="clearOwnerDeletePasswordError()">
+            <button type="button"
+                    id="btnToggleOwnerDeletePass"
+                    onclick="toggleOwnerDeletePasswordVisibility()"
+                    aria-label="Show password"
+                    title="Show / Hide Password"
+                    style="position: absolute; right: 10px; background: transparent; border: none; color: #64748b; cursor: pointer; font-size: 14px; padding: 4px 6px; font-weight: 700;">
+              👁️
+            </button>
+          </div>
+        </div>
+
+        <div id="ownerDeleteErrorAlert" style="display: none; background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c; border-radius: 10px; padding: 10px 12px; font-size: 12.5px; font-weight: 700; margin-bottom: 14px; line-height: 1.4;"></div>
+
+        <div style="display: flex; gap: 10px; margin-top: 16px;">
+          <button type="button" id="btnCancelOwnerDelete" class="clay-btn clay-btn-secondary" style="flex: 1; padding: 11px;" onclick="closeOwnerDeleteConfirmModal()">
+            Cancel
+          </button>
+          <button type="submit" id="btnConfirmOwnerDelete" class="clay-btn clay-btn-primary" style="flex: 1.4; padding: 11px; background: linear-gradient(135deg, #e11d48, #be123c); border-color: #be123c; color: #ffffff; font-weight: 800; box-shadow: 0 6px 16px rgba(225, 29, 72, 0.3);">
+            <span>🗑️ Confirm Delete</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <div class="modal-backdrop" id="announcementModal">
     <div class="clay-modal" style="max-width: 560px;">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
@@ -3205,18 +3320,192 @@ $pendingReviewCount = count($pendingReviewPayments);
     // It strictly DOES NOT redirect them back to the main Landlord Dashboard.
     // =========================================================================
     let isDeletingTenant = false;
+    let isSubmittingOwnerDelete = false;
+    let pendingOwnerDeleteContext = null;
 
-    async function deleteTenantAccount(tenantId, tenantName, unitNumber, unitId = null, alreadyMovedOut = false) {
-      if (isDeletingTenant) return;
+    function clearOwnerDeletePasswordError() {
+      const errEl = document.getElementById('ownerDeleteErrorAlert');
+      if (errEl) {
+        errEl.style.display = 'none';
+        errEl.textContent = '';
+      }
+    }
 
-      const promptMsg = alreadyMovedOut 
-        ? `Verify settlement and archive account for '${tenantName}'? If all bills are paid and verified, this tenant will be archived.`
-        : `Are you sure you want to mark '${tenantName}' as Moved Out? If all bills and charges are fully settled, the account will be automatically archived.`;
+    function toggleOwnerDeletePasswordVisibility() {
+      const pwInput = document.getElementById('ownerDeletePasswordInput');
+      const toggleBtn = document.getElementById('btnToggleOwnerDeletePass');
+      if (!pwInput || !toggleBtn) return;
 
-      const confirmed = confirm(promptMsg);
-      if (!confirmed) {
+      if (pwInput.type === 'password') {
+        pwInput.type = 'text';
+        toggleBtn.textContent = '🙈';
+        toggleBtn.setAttribute('aria-label', 'Hide password');
+      } else {
+        pwInput.type = 'password';
+        toggleBtn.textContent = '👁️';
+        toggleBtn.setAttribute('aria-label', 'Show password');
+      }
+    }
+
+    function openOwnerDeleteConfirmModal(context) {
+      if (isSubmittingOwnerDelete) return;
+      pendingOwnerDeleteContext = context;
+
+      const modal = document.getElementById('ownerDeleteConfirmModal');
+      const titleEl = document.getElementById('ownerDeleteModalTitle');
+      const targetNameEl = document.getElementById('ownerDeleteTargetName');
+      const targetMetaEl = document.getElementById('ownerDeleteTargetMeta');
+      const warningEl = document.getElementById('ownerDeleteWarningText');
+      const pwInput = document.getElementById('ownerDeletePasswordInput');
+      const toggleBtn = document.getElementById('btnToggleOwnerDeletePass');
+      const confirmBtn = document.getElementById('btnConfirmOwnerDelete');
+
+      if (!modal || !pwInput) return;
+
+      pwInput.value = '';
+      pwInput.type = 'password';
+      if (toggleBtn) {
+        toggleBtn.textContent = '👁️';
+        toggleBtn.setAttribute('aria-label', 'Show password');
+      }
+      clearOwnerDeletePasswordError();
+
+      const safeName = context.tenantName || 'Selected Tenant';
+      if (targetNameEl) targetNameEl.textContent = safeName;
+
+      if (context.mode === 'permanent_delete') {
+        if (titleEl) titleEl.textContent = 'Permanently Delete Tenant Account';
+        if (targetMetaEl) targetMetaEl.textContent = `Archived • Tenant ID #${context.tenantId}`;
+        if (warningEl) {
+          warningEl.textContent = `WARNING: Permanently deleting "${safeName}" will erase their account, payment records, maintenance tickets, and notifications forever. This action is permanent and cannot be undone.`;
+        }
+        if (confirmBtn) confirmBtn.innerHTML = '<span>🗑️ Confirm Delete</span>';
+      } else {
+        const rawUnit = context.unitNumber ? String(context.unitNumber).trim() : '';
+        const unitLabel = rawUnit
+          ? (/^unit\b/i.test(rawUnit) ? rawUnit : `Unit ${rawUnit}`)
+          : 'Assigned Unit';
+        if (titleEl) titleEl.textContent = context.alreadyMovedOut ? 'Verify Settlement & Archive Tenant' : 'Delete / Move Out Tenant Account';
+        if (targetMetaEl) targetMetaEl.textContent = `${unitLabel} • Tenant ID #${context.tenantId}`;
+        if (warningEl) {
+          warningEl.textContent = context.alreadyMovedOut
+            ? `Permanent Action Warning: Confirming will verify bill settlement and archive "${safeName}" out of active tenancy. Please enter your owner password to continue.`
+            : `Permanent Action Warning: Removing or marking "${safeName}" as Moved Out permanently closes their active tenancy (and archives settled records). Enter your owner password to continue.`;
+        }
+        if (confirmBtn) confirmBtn.innerHTML = '<span>🗑️ Confirm Delete</span>';
+      }
+
+      modal.classList.add('open', 'active');
+      setTimeout(() => {
+        if (pwInput) pwInput.focus();
+      }, 120);
+    }
+
+    function closeOwnerDeleteConfirmModal(force = false) {
+      if (isSubmittingOwnerDelete && !force) return;
+      const modal = document.getElementById('ownerDeleteConfirmModal');
+      const pwInput = document.getElementById('ownerDeletePasswordInput');
+      const toggleBtn = document.getElementById('btnToggleOwnerDeletePass');
+
+      if (pwInput) {
+        pwInput.value = '';
+        pwInput.type = 'password';
+      }
+      if (toggleBtn) {
+        toggleBtn.textContent = '👁️';
+        toggleBtn.setAttribute('aria-label', 'Show password');
+      }
+      clearOwnerDeletePasswordError();
+      pendingOwnerDeleteContext = null;
+
+      if (modal) {
+        modal.classList.remove('open', 'active');
+      }
+    }
+
+    function handleOwnerDeleteBackdropClick(event) {
+      if (event.target === document.getElementById('ownerDeleteConfirmModal')) {
+        closeOwnerDeleteConfirmModal();
+      }
+    }
+
+    async function executeVerifiedTenantDeletion() {
+      if (isSubmittingOwnerDelete || !pendingOwnerDeleteContext) return;
+
+      const pwInput = document.getElementById('ownerDeletePasswordInput');
+      const errEl = document.getElementById('ownerDeleteErrorAlert');
+      const confirmBtn = document.getElementById('btnConfirmOwnerDelete');
+      const cancelBtn = document.getElementById('btnCancelOwnerDelete');
+
+      const ownerPassword = pwInput ? pwInput.value : '';
+      if (!ownerPassword) {
+        if (errEl) {
+          errEl.textContent = 'Please enter your current owner account password to confirm deletion.';
+          errEl.style.display = 'block';
+        }
+        if (pwInput) pwInput.focus();
         return;
       }
+
+      // Immediately clear plaintext input after reading into transient local variable
+      if (pwInput) pwInput.value = '';
+      clearOwnerDeletePasswordError();
+
+      isSubmittingOwnerDelete = true;
+      const origConfirmHtml = confirmBtn ? confirmBtn.innerHTML : '<span>🗑️ Confirm Delete</span>';
+      if (confirmBtn) {
+        confirmBtn.disabled = true;
+        confirmBtn.style.opacity = '0.75';
+        confirmBtn.style.cursor = 'not-allowed';
+        confirmBtn.innerHTML = '<span class="clay-spinner" style="width: 14px; height: 14px; border-width: 2px; vertical-align: middle; margin-right: 6px;"></span><span>Verifying...</span>';
+      }
+      if (cancelBtn) cancelBtn.disabled = true;
+
+      let resultOutcome = { ok: false, message: 'Unable to complete deletion.' };
+      const ctx = pendingOwnerDeleteContext;
+
+      try {
+        if (ctx.mode === 'permanent_delete') {
+          resultOutcome = await performPermanentDeleteArchived(ctx.tenantId, ctx.tenantName, ownerPassword);
+        } else {
+          resultOutcome = await performTenantMoveOutDelete(ctx.tenantId, ctx.tenantName, ctx.unitNumber, ctx.unitId, ctx.alreadyMovedOut, ownerPassword);
+        }
+      } finally {
+        isSubmittingOwnerDelete = false;
+        if (confirmBtn) {
+          confirmBtn.disabled = false;
+          confirmBtn.style.opacity = '1';
+          confirmBtn.style.cursor = 'pointer';
+          confirmBtn.innerHTML = origConfirmHtml;
+        }
+        if (cancelBtn) cancelBtn.disabled = false;
+      }
+
+      if (resultOutcome && resultOutcome.ok) {
+        closeOwnerDeleteConfirmModal(true);
+      } else {
+        if (errEl) {
+          errEl.textContent = (resultOutcome && resultOutcome.message) ? resultOutcome.message : 'Incorrect password or deletion failed.';
+          errEl.style.display = 'block';
+        }
+        if (pwInput) pwInput.focus();
+      }
+    }
+
+    function deleteTenantAccount(tenantId, tenantName, unitNumber, unitId = null, alreadyMovedOut = false) {
+      if (isDeletingTenant || isSubmittingOwnerDelete) return;
+      openOwnerDeleteConfirmModal({
+        mode: 'mark_moved_out',
+        tenantId: parseInt(tenantId, 10),
+        tenantName: tenantName || 'Tenant',
+        unitNumber: unitNumber || '',
+        unitId: unitId,
+        alreadyMovedOut: !!alreadyMovedOut
+      });
+    }
+
+    async function performTenantMoveOutDelete(tenantId, tenantName, unitNumber, unitId = null, alreadyMovedOut = false, ownerPassword = '') {
+      if (isDeletingTenant) return { ok: false, message: 'Deletion is already in progress.' };
 
       isDeletingTenant = true;
       const delBtn = document.getElementById('tdBtnDelete');
@@ -3233,11 +3522,17 @@ $pendingReviewCount = count($pendingReviewPayments);
         `;
       }
 
+      let outcome = { ok: true, message: '' };
+
       try {
         const res = await fetch('api/tenant_directory_api.php', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'mark_moved_out', tenant_id: parseInt(tenantId, 10) })
+          body: JSON.stringify({
+            action: 'mark_moved_out',
+            tenant_id: parseInt(tenantId, 10),
+            owner_password: ownerPassword
+          })
         });
         const result = await res.json();
 
@@ -3270,10 +3565,12 @@ $pendingReviewCount = count($pendingReviewPayments);
             window.location.reload();
           }, 1200);
         } else {
-          showToast(result.message || 'Error processing move-out.', 'error');
+          outcome = { ok: false, message: result.message || 'Error processing move-out.' };
+          showToast(outcome.message, 'error');
         }
       } catch (e) {
-        showToast('Network error while processing move-out. Please try again.', 'error');
+        outcome = { ok: false, message: 'Network error while processing move-out. Please try again.' };
+        showToast(outcome.message, 'error');
       } finally {
         isDeletingTenant = false;
         if (delBtn) {
@@ -3283,6 +3580,8 @@ $pendingReviewCount = count($pendingReviewPayments);
           delBtn.innerHTML = origBtnContent;
         }
       }
+
+      return outcome;
     }
 
     // Restore active section, unit folder, or profile tab on page load
@@ -3663,41 +3962,56 @@ $pendingReviewCount = count($pendingReviewPayments);
       }
     }
 
-    async function submitPermanentDeleteArchived() {
+    function submitPermanentDeleteArchived() {
       const tenantId = document.getElementById('archivedModalTenantId').value;
-      if (!tenantId) return;
+      if (!tenantId || isSubmittingOwnerDelete) return;
 
       const tenantName = document.getElementById('archivedPersonalName').textContent || 'this tenant';
-      const confirmFirst = confirm(`⚠️ PERMANENT DELETION WARNING:\n\nAre you sure you want to permanently delete the archived account of '${tenantName}'?\n\nThis action cannot be undone.`);
-      if (!confirmFirst) return;
+      openOwnerDeleteConfirmModal({
+        mode: 'permanent_delete',
+        tenantId: parseInt(tenantId, 10),
+        tenantName: tenantName
+      });
+    }
 
-      const confirmSecond = confirm(`Please confirm a second time: Permanently delete '${tenantName}'? All associated account records will be removed.`);
-      if (!confirmSecond) return;
-
+    async function performPermanentDeleteArchived(tenantId, tenantName, ownerPassword) {
       const btn = document.getElementById('btnPermanentDeleteArchived');
-      const origHtml = btn.innerHTML;
-      btn.innerHTML = 'Deleting...';
-      btn.disabled = true;
+      const origHtml = btn ? btn.innerHTML : '';
+      if (btn) {
+        btn.innerHTML = 'Deleting...';
+        btn.disabled = true;
+      }
 
       try {
         const res = await fetch('api/tenant_directory_api.php', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'permanent_delete', tenant_id: parseInt(tenantId, 10) })
+          body: JSON.stringify({
+            action: 'permanent_delete',
+            tenant_id: parseInt(tenantId, 10),
+            owner_password: ownerPassword
+          })
         });
         const data = await res.json();
         if (res.ok && data.status === 'success') {
           showToast(data.message || `Tenant account '${tenantName}' permanently deleted.`);
           closeArchivedTenantModal();
           loadArchivedTenants();
+          return { ok: true, message: data.message };
         } else {
-          showToast(data.message || 'Failed to permanently delete tenant account.', 'error');
+          const errMsg = data.message || 'Failed to permanently delete tenant account.';
+          showToast(errMsg, 'error');
+          return { ok: false, message: errMsg };
         }
       } catch (err) {
-        showToast('Error communicating with server while deleting account.', 'error');
+        const errMsg = 'Error communicating with server while deleting account.';
+        showToast(errMsg, 'error');
+        return { ok: false, message: errMsg };
       } finally {
-        btn.innerHTML = origHtml;
-        btn.disabled = false;
+        if (btn) {
+          btn.innerHTML = origHtml;
+          btn.disabled = false;
+        }
       }
     }
 
@@ -3972,6 +4286,10 @@ $pendingReviewCount = count($pendingReviewPayments);
     // Escape key listener for closing modals
     document.addEventListener('keydown', function(e) {
       if (e.key === 'Escape' || e.keyCode === 27) {
+        if (document.getElementById('ownerDeleteConfirmModal')?.classList.contains('open') || document.getElementById('ownerDeleteConfirmModal')?.classList.contains('active')) {
+          closeOwnerDeleteConfirmModal();
+          return;
+        }
         if (document.getElementById('ticketDetailsModal')?.classList.contains('open') || document.getElementById('ticketDetailsModal')?.classList.contains('active')) {
           closeTicketDetailsModal();
         }

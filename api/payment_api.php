@@ -184,8 +184,9 @@ try {
         // 2. Tenant Receipt Upload Workflow
         // ---------------------------------------------------------------------
         if ($action === 'upload_receipt') {
+            AccessControl::requireVerifiedTenantJson($pdo);
             $tenantUser = Auth::user();
-            $tenantId = $tenantUser ? (int)$tenantUser['id'] : 2;
+            $tenantId = (int)$tenantUser['id'];
 
             $targetPaymentId = (int)($_POST['payment_id'] ?? 0);
             $paymentTypeInput = trim((string)($_POST['payment_type'] ?? ''));

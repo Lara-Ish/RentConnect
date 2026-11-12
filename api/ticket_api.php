@@ -173,14 +173,27 @@ try {
         }
 
         // Action 2: Tenant Creates New Maintenance Ticket
+        if ($action !== '' && $action !== 'create') {
+            http_response_code(400);
+            echo json_encode(['status' => 'error', 'message' => 'Invalid maintenance ticket action.']);
+            exit;
+        }
+
+        AccessControl::requireVerifiedTenantJson($pdo);
+
         $title = trim((string)($input['title'] ?? ''));
         $description = trim((string)($input['description'] ?? ''));
         $category = trim((string)($input['category'] ?? 'General'));
         $priority = trim((string)($input['priority'] ?? 'medium'));
 
         $tenantUser = Auth::user();
-        $tenantId = $tenantUser ? (int)$tenantUser['id'] : 2;
-        $unitId = $tenantUser && isset($tenantUser['unit_id']) ? (int)$tenantUser['unit_id'] : 1;
+        $tenantId = (int)$tenantUser['id'];
+        $unitId = isset($tenantUser['unit_id']) ? (int)$tenantUser['unit_id'] : 0;
+        if ($unitId <= 0) {
+            $uStmt = $pdo->prepare("SELECT unit_id FROM users WHERE id = :id LIMIT 1");
+            $uStmt->execute([':id' => $tenantId]);
+            $unitId = (int)$uStmt->fetchColumn() ?: 1;
+        }
 
         if (empty($title) || empty($description)) {
             http_response_code(422);
